@@ -62,7 +62,7 @@ The following prerequisites are needed to deploy and test the solution:
 
 ### Option 1 : Use Cloud9 
 
-Create a Cloud9 Instance to run this solution (https://catalog.us-east-1.prod.workshops.aws/workshops/d93fec4c-fb0f-4813-ac90-758cb5527f2f/en-US/start/cloud9)
+Create a Cloud9 Instance to run this solution (https://catalog.us-east-1.prod.workshops.aws/workshops/d93fec4c-fb0f-4813-ac90-758cb5527f2f/en-US/start/using-own-account/cloud9)
 
 ### Option 2 : Using your desktop
 
@@ -82,7 +82,7 @@ Open Cloud9 environment or local environment and run the commands below to initi
 [IMPORTANT!]
 > **Check for availability of all services such as HealthOmics in the region before you take the steps below. Use the following resource to confirm: https://aws.amazon.com/about-aws/global-infrastructure/regional-product-services/**
 
-    python -m pip install aws-cdk-lib
+    python3 -m pip install aws-cdk-lib
     npm install -g aws-cdk
     npm install -g aws-cdk --force
     cdk bootstrap aws://<ACCOUNTID>/<AWS-REGION>   # do this if your account hasn't been bootstraped
