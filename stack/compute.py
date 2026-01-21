@@ -172,7 +172,7 @@ class omics_workflow_Stack(Stack):
                 "arn:aws:s3:::giab/*",
                 f"arn:aws:s3:::aws-genomics-static-{aws_region}",
                 f"arn:aws:s3:::aws-genomics-static-{aws_region}/*",
-                f"arn:aws:s3:::omics-{aws_region}"
+                f"arn:aws:s3:::omics-{aws_region}",
                 f"arn:aws:s3:::omics-{aws_region}/*"     
                 ]
             )
@@ -260,7 +260,7 @@ class omics_workflow_Stack(Stack):
         # initial HealthOmics workflow
         initial_workflow_lambda = lambda_.Function(
             self, f"{APP_NAME}_initial_workflow_lambda",
-            runtime=lambda_.Runtime.PYTHON_3_8,
+            runtime=lambda_.Runtime.PYTHON_3_12,
             handler="initial_workflow_lambda_handler.handler",
             code=lambda_.Code.from_asset("lambda_function/initial_workflow_lambda"),
             role=lambda_role,
@@ -292,7 +292,7 @@ class omics_workflow_Stack(Stack):
         # Create Lambda function to submit second Omics pipeline
         second_workflow_lambda = lambda_.Function(
             self, f"{APP_NAME}_post_initial_workflow_lambda",
-            runtime=lambda_.Runtime.PYTHON_3_8,
+            runtime=lambda_.Runtime.PYTHON_3_12,
             handler="post_initial_workflow_lambda_handler.handler",
             code=lambda_.Code.from_asset("lambda_function/post_initial_workflow_lambda"),
             role=lambda_role,
