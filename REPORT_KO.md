@@ -79,6 +79,55 @@ f"arn:aws:s3:::omics-{aws_region}/*"
   - `SQS_MESSAGE_VISIBILITY` - SQS 미사용
   - `REQUIREMENTS_FILE` - 참조되지 않음
 
+### 3.3 ECR 권한 설정 추가
+
+#### 3.3.1 문제점
+AWS HealthOmics 프라이빗 워크플로우에서 ECR 컨테이너 이미지를 사용하려면 ECR 리포지토리에 HealthOmics 서비스 principal (`omics.amazonaws.com`)이 이미지를 pull할 수 있는 권한이 필요합니다.
+
+참고: [Amazon ECR Permissions for AWS HealthOmics](https://docs.aws.amazon.com/omics/latest/dev/permissions-ecr.html)
+
+#### 3.3.2 해결 방법
+**파일:** `stack/compute.py`
+
+CDK 스택에 ECR 리포지토리 생성 및 리소스 정책 추가:
+
+```python
+# ECR 리포지토리 생성
+vep_ecr_repo = ecr.Repository(self, f"{APP_NAME}-vep-repo",
+    repository_name="quay/biocontainers/ensembl-vep",
+    removal_policy=RemovalPolicy.RETAIN
+)
+
+# HealthOmics 서비스 접근 권한 추가
+vep_ecr_repo.add_to_resource_policy(
+    iam.PolicyStatement(
+        sid="OmicsWorkflowAccess",
+        effect=iam.Effect.ALLOW,
+        principals=[iam.ServicePrincipal("omics.amazonaws.com")],
+        actions=[
+            "ecr:GetDownloadUrlForLayer",
+            "ecr:BatchGetImage",
+            "ecr:BatchCheckLayerAvailability"
+        ]
+    )
+)
+```
+
+#### 3.3.3 컨테이너 이미지 푸시
+CDK 배포 후 VEP 컨테이너 이미지를 ECR에 푸시해야 합니다:
+
+```bash
+# ECR 로그인
+aws ecr get-login-password --region ${AWS_REGION} | \
+  docker login --username AWS --password-stdin ${ECR_REGISTRY}
+
+# 이미지 pull, tag, push
+docker pull quay.io/biocontainers/ensembl-vep:106.1--pl5321h4a94de4_0
+docker tag quay.io/biocontainers/ensembl-vep:106.1--pl5321h4a94de4_0 \
+  ${ECR_REGISTRY}/quay/biocontainers/ensembl-vep:106.1--pl5321h4a94de4_0
+docker push ${ECR_REGISTRY}/quay/biocontainers/ensembl-vep:106.1--pl5321h4a94de4_0
+```
+
 ---
 
 ## 4. 배포 가이드
@@ -111,6 +160,7 @@ cdk deploy --all
 - S3 버킷 2개 (입력/출력)
 - Lambda 함수 2개 (초기/후속 워크플로우)
 - HealthOmics 프라이빗 워크플로우 (VEP)
+- ECR 리포지토리 (VEP 컨테이너 이미지용, HealthOmics 권한 포함)
 - EventBridge 규칙 2개
 - SNS 토픽 1개
 - IAM 역할 및 정책

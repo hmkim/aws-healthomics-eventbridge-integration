@@ -1,15 +1,17 @@
 from aws_cdk import (
-    Stack,  
-    Duration, 
+    Stack,
+    Duration,
+    RemovalPolicy,
     aws_s3 as s3,
     aws_lambda as lambda_,
     aws_omics as omics,
     aws_lambda_event_sources as lambda_event_sources,
     aws_events as events,
-    aws_events_targets as events_targets,    
+    aws_events_targets as events_targets,
     aws_sns as sns,
     aws_iam as iam,
     aws_s3_assets as s3_assets,
+    aws_ecr as ecr,
     Aspects
 )
 
@@ -222,6 +224,31 @@ class omics_workflow_Stack(Stack):
             resources = ['*']
         )
         lambda_role.add_to_policy(lambda_omics_policy)
+
+        ################################################################################################
+        #################################### ECR Repository for VEP ####################################
+
+        # Create ECR repository for VEP container image
+        # The container image must be pushed to this repository before running the workflow
+        vep_ecr_repo = ecr.Repository(self, f"{APP_NAME}-vep-repo",
+            repository_name="quay/biocontainers/ensembl-vep",
+            removal_policy=RemovalPolicy.RETAIN
+        )
+
+        # Add resource policy allowing HealthOmics service to pull images
+        # Reference: https://docs.aws.amazon.com/omics/latest/dev/permissions-ecr.html
+        vep_ecr_repo.add_to_resource_policy(
+            iam.PolicyStatement(
+                sid="OmicsWorkflowAccess",
+                effect=iam.Effect.ALLOW,
+                principals=[iam.ServicePrincipal("omics.amazonaws.com")],
+                actions=[
+                    "ecr:GetDownloadUrlForLayer",
+                    "ecr:BatchGetImage",
+                    "ecr:BatchCheckLayerAvailability"
+                ]
+            )
+        )
 
         ################################################################################################
         #################################### Create HealthOmics Workflow ###############################
