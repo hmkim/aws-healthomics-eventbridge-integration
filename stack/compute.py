@@ -57,8 +57,8 @@ class omics_workflow_Stack(Stack):
 
         ################################################################################################
         #################################### Notification ##############################################
-        
-        # SNS Topic for failure notifications
+
+        # SNS Topic for workflow notifications
         sns_topic = sns.Topic(self, f'{APP_NAME}_workflow_status_topic',
             display_name=f"{APP_NAME}_workflow_status_topic",
             topic_name=f"{APP_NAME}_workflow_status_topic"
@@ -81,8 +81,7 @@ class omics_workflow_Stack(Stack):
             )
         )
         rule_workflow_status_topic.add_target(events_targets.SnsTopic(sns_topic))
-        
-        
+
         # Grant EventBridge permission to publish to the SNS topic
         sns_topic.grant_publish(iam.ServicePrincipal('events.amazonaws.com'))        
         
@@ -225,29 +224,24 @@ class omics_workflow_Stack(Stack):
         )
         lambda_role.add_to_policy(lambda_omics_policy)
 
+        # KMS permission for SNS topic encryption
+        lambda_kms_policy = iam.PolicyStatement(
+            actions = [
+                'kms:GenerateDataKey',
+                'kms:Decrypt'
+            ],
+            resources = ['*']
+        )
+        lambda_role.add_to_policy(lambda_kms_policy)
+
         ################################################################################################
         #################################### ECR Repository for VEP ####################################
 
-        # Create ECR repository for VEP container image
-        # The container image must be pushed to this repository before running the workflow
-        vep_ecr_repo = ecr.Repository(self, f"{APP_NAME}-vep-repo",
-            repository_name="quay/biocontainers/ensembl-vep",
-            removal_policy=RemovalPolicy.RETAIN
-        )
-
-        # Add resource policy allowing HealthOmics service to pull images
-        # Reference: https://docs.aws.amazon.com/omics/latest/dev/permissions-ecr.html
-        vep_ecr_repo.add_to_resource_policy(
-            iam.PolicyStatement(
-                sid="OmicsWorkflowAccess",
-                effect=iam.Effect.ALLOW,
-                principals=[iam.ServicePrincipal("omics.amazonaws.com")],
-                actions=[
-                    "ecr:GetDownloadUrlForLayer",
-                    "ecr:BatchGetImage",
-                    "ecr:BatchCheckLayerAvailability"
-                ]
-            )
+        # Import existing ECR repository for VEP container image
+        # The repository was created previously and retained
+        vep_ecr_repo = ecr.Repository.from_repository_name(
+            self, f"{APP_NAME}-vep-repo",
+            repository_name="quay/biocontainers/ensembl-vep"
         )
 
         ################################################################################################
@@ -349,7 +343,7 @@ class omics_workflow_Stack(Stack):
             self, f"{APP_NAME}_rule_second_workflow_lambda",
             event_pattern=events.EventPattern(
                 source=["aws.omics"],
-                detail_type=["Run Status Change"],                
+                detail_type=["Run Status Change"],
                 detail={
                     "status": [
                         "COMPLETED"
@@ -358,6 +352,47 @@ class omics_workflow_Stack(Stack):
             )
         )
         rule_second_workflow_lambda.add_target(events_targets.LambdaFunction(second_workflow_lambda))
+
+        ################################################################################################
+        #################################### Notification Lambda for Completion ########################
+
+        # SES email configuration (verified email addresses required)
+        # To use SES, verify sender email in SES console first
+        SES_SENDER_EMAIL = "hyunmink+omics@amazon.com"  # Must be verified in SES
+        SES_RECIPIENT_EMAIL = "hyunmink+notice@amazon.com"  # Must be verified in SES (sandbox mode)
+
+        # Create Lambda function for workflow completion notifications
+        # Sends HTML emails via SES with clickable presigned URLs
+        notification_lambda = lambda_.Function(
+            self, f"{APP_NAME}_notification_lambda",
+            runtime=lambda_.Runtime.PYTHON_3_12,
+            handler="notification_lambda_handler.handler",
+            code=lambda_.Code.from_asset("lambda_function/notification_lambda"),
+            role=lambda_role,
+            timeout=Duration.seconds(60),
+            retry_attempts=1,
+            environment={
+                "SNS_TOPIC_ARN": sns_topic.topic_arn,
+                "VEP_WORKFLOW_ID": private_workflow_cfn.attr_id,
+                "GATK_WORKFLOW_ID": READY2RUN_WORKFLOW_ID,
+                "SES_SENDER_EMAIL": SES_SENDER_EMAIL,
+                "SES_RECIPIENT_EMAIL": SES_RECIPIENT_EMAIL,
+                "LOG_LEVEL": "INFO"
+            }
+        )
+
+        # Grant notification lambda permission to publish to SNS
+        sns_topic.grant_publish(notification_lambda)
+
+        # Grant notification lambda permission to send emails via SES
+        lambda_role.add_to_policy(iam.PolicyStatement(
+            actions=['ses:SendEmail', 'ses:SendRawEmail'],
+            resources=['*']
+        ))
+
+        # The notification lambda uses the same EventBridge rule as second_workflow_lambda
+        # since both need to respond to COMPLETED events
+        rule_second_workflow_lambda.add_target(events_targets.LambdaFunction(notification_lambda))
 
         #Aspects.of(self).add(cdk_nag.AwsSolutionsChecks())
  
