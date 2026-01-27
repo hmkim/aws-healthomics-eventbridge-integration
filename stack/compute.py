@@ -225,6 +225,26 @@ class omics_workflow_Stack(Stack):
         )
         lambda_role.add_to_policy(lambda_omics_policy)
 
+        # KMS permission for SNS topic encryption
+        lambda_kms_policy = iam.PolicyStatement(
+            actions = [
+                'kms:GenerateDataKey',
+                'kms:Decrypt'
+            ],
+            resources = ['*']
+        )
+        lambda_role.add_to_policy(lambda_kms_policy)
+
+        # SES permission for sending HTML emails
+        lambda_ses_policy = iam.PolicyStatement(
+            actions = [
+                'ses:SendEmail',
+                'ses:SendRawEmail'
+            ],
+            resources = ['*']
+        )
+        lambda_role.add_to_policy(lambda_ses_policy)
+
         ################################################################################################
         #################################### ECR Repository for VEP ####################################
 
@@ -358,6 +378,42 @@ class omics_workflow_Stack(Stack):
             )
         )
         rule_second_workflow_lambda.add_target(events_targets.LambdaFunction(second_workflow_lambda))
+
+        ################################################################################################
+        #################################### Notification Lambda for Completion ########################
+
+        # SES email configuration (verified email addresses required)
+        # To use SES, verify sender email in SES console first
+        # Replace with your verified SES email addresses
+        SES_SENDER_EMAIL = ""  # Must be verified in SES (e.g., sender@example.com)
+        SES_RECIPIENT_EMAIL = ""  # Must be verified in SES (e.g., recipient@example.com)
+
+        # Create Lambda function for workflow completion notifications
+        # Sends HTML emails via SES with clickable presigned URLs
+        notification_lambda = lambda_.Function(
+            self, f"{APP_NAME}_notification_lambda",
+            runtime=lambda_.Runtime.PYTHON_3_12,
+            handler="notification_lambda_handler.handler",
+            code=lambda_.Code.from_asset("lambda_function/notification_lambda"),
+            role=lambda_role,
+            timeout=Duration.seconds(60),
+            retry_attempts=1,
+            environment={
+                "SNS_TOPIC_ARN": sns_topic.topic_arn,
+                "VEP_WORKFLOW_ID": private_workflow_cfn.attr_id,
+                "GATK_WORKFLOW_ID": READY2RUN_WORKFLOW_ID,
+                "SES_SENDER_EMAIL": SES_SENDER_EMAIL,
+                "SES_RECIPIENT_EMAIL": SES_RECIPIENT_EMAIL,
+                "LOG_LEVEL": "INFO"
+            }
+        )
+
+        # Grant notification lambda permission to publish to SNS
+        sns_topic.grant_publish(notification_lambda)
+
+        # The notification lambda uses the same EventBridge rule as second_workflow_lambda
+        # since both need to respond to COMPLETED events
+        rule_second_workflow_lambda.add_target(events_targets.LambdaFunction(notification_lambda))
 
         #Aspects.of(self).add(cdk_nag.AwsSolutionsChecks())
  
