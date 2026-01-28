@@ -1,15 +1,17 @@
 from aws_cdk import (
-    Stack,  
-    Duration, 
+    Stack,
+    Duration,
+    RemovalPolicy,
     aws_s3 as s3,
     aws_lambda as lambda_,
     aws_omics as omics,
     aws_lambda_event_sources as lambda_event_sources,
     aws_events as events,
-    aws_events_targets as events_targets,    
+    aws_events_targets as events_targets,
     aws_sns as sns,
     aws_iam as iam,
     aws_s3_assets as s3_assets,
+    aws_ecr as ecr,
     Aspects
 )
 
@@ -172,7 +174,7 @@ class omics_workflow_Stack(Stack):
                 "arn:aws:s3:::giab/*",
                 f"arn:aws:s3:::aws-genomics-static-{aws_region}",
                 f"arn:aws:s3:::aws-genomics-static-{aws_region}/*",
-                f"arn:aws:s3:::omics-{aws_region}"
+                f"arn:aws:s3:::omics-{aws_region}",
                 f"arn:aws:s3:::omics-{aws_region}/*"     
                 ]
             )
@@ -224,6 +226,31 @@ class omics_workflow_Stack(Stack):
         lambda_role.add_to_policy(lambda_omics_policy)
 
         ################################################################################################
+        #################################### ECR Repository for VEP ####################################
+
+        # Create ECR repository for VEP container image
+        # The container image must be pushed to this repository before running the workflow
+        vep_ecr_repo = ecr.Repository(self, f"{APP_NAME}-vep-repo",
+            repository_name="quay/biocontainers/ensembl-vep",
+            removal_policy=RemovalPolicy.RETAIN
+        )
+
+        # Add resource policy allowing HealthOmics service to pull images
+        # Reference: https://docs.aws.amazon.com/omics/latest/dev/permissions-ecr.html
+        vep_ecr_repo.add_to_resource_policy(
+            iam.PolicyStatement(
+                sid="OmicsWorkflowAccess",
+                effect=iam.Effect.ALLOW,
+                principals=[iam.ServicePrincipal("omics.amazonaws.com")],
+                actions=[
+                    "ecr:GetDownloadUrlForLayer",
+                    "ecr:BatchGetImage",
+                    "ecr:BatchCheckLayerAvailability"
+                ]
+            )
+        )
+
+        ################################################################################################
         #################################### Create HealthOmics Workflow ###############################
 
         PRIVATE_WORKFLOW_NAME = 'vep'
@@ -260,7 +287,7 @@ class omics_workflow_Stack(Stack):
         # initial HealthOmics workflow
         initial_workflow_lambda = lambda_.Function(
             self, f"{APP_NAME}_initial_workflow_lambda",
-            runtime=lambda_.Runtime.PYTHON_3_8,
+            runtime=lambda_.Runtime.PYTHON_3_12,
             handler="initial_workflow_lambda_handler.handler",
             code=lambda_.Code.from_asset("lambda_function/initial_workflow_lambda"),
             role=lambda_role,
@@ -292,7 +319,7 @@ class omics_workflow_Stack(Stack):
         # Create Lambda function to submit second Omics pipeline
         second_workflow_lambda = lambda_.Function(
             self, f"{APP_NAME}_post_initial_workflow_lambda",
-            runtime=lambda_.Runtime.PYTHON_3_8,
+            runtime=lambda_.Runtime.PYTHON_3_12,
             handler="post_initial_workflow_lambda_handler.handler",
             code=lambda_.Code.from_asset("lambda_function/post_initial_workflow_lambda"),
             role=lambda_role,
