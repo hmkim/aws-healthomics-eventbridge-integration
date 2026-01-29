@@ -21,13 +21,24 @@ This workflow runs Ensembl's Variant Effect Predictor (VEP) on AWS HealthOmics. 
 - **Engine:** Nextflow
 - **DSL Version:** 2
 
-## ECR Container Setup (Required)
+## ECR Container Setup (Automated)
 
 AWS HealthOmics private workflows require container images to be stored in Amazon ECR with proper permissions.
 
-### ECR Repository Policy
+### Automated Container Deployment
 
-The CDK stack automatically creates an ECR repository with the required HealthOmics permissions. The repository policy grants `omics.amazonaws.com` service principal access to pull images:
+The CDK stack **automatically handles** the following during `cdk deploy`:
+
+1. **Builds the Docker image** from `workflows/vep/docker/Dockerfile`
+2. **Pushes the image to ECR** using CDK's `DockerImageAsset`
+3. **Configures ECR repository policy** granting `omics.amazonaws.com` access
+4. **Passes the image URI** to the VEP workflow via Lambda environment variables
+
+**No manual Docker push is required.**
+
+### ECR Repository Policy (Auto-configured)
+
+The CDK stack automatically adds this policy to the ECR repository:
 
 ```json
 {
@@ -51,78 +62,37 @@ The CDK stack automatically creates an ECR repository with the required HealthOm
 
 Reference: [Amazon ECR Permissions for AWS HealthOmics](https://docs.aws.amazon.com/omics/latest/dev/permissions-ecr.html)
 
-### Push Container Image to ECR
+### Container Image Source
 
-After deploying the CDK stack, push the VEP container image to ECR:
+The Dockerfile (`workflows/vep/docker/Dockerfile`) uses the official biocontainers image:
 
-```bash
-# Set variables
-export AWS_REGION=us-east-1
-export ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
-export ECR_REGISTRY=${ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com
-
-# Login to ECR
-aws ecr get-login-password --region ${AWS_REGION} | \
-  docker login --username AWS --password-stdin ${ECR_REGISTRY}
-
-# Pull public image
-docker pull quay.io/biocontainers/ensembl-vep:106.1--pl5321h4a94de4_0
-
-# Tag for ECR
-docker tag quay.io/biocontainers/ensembl-vep:106.1--pl5321h4a94de4_0 \
-  ${ECR_REGISTRY}/quay/biocontainers/ensembl-vep:106.1--pl5321h4a94de4_0
-
-# Push to ECR
-docker push ${ECR_REGISTRY}/quay/biocontainers/ensembl-vep:106.1--pl5321h4a94de4_0
+```dockerfile
+FROM quay.io/biocontainers/ensembl-vep:106.1--pl5321h4a94de4_0
 ```
 
-### Manual ECR Policy Setup (if needed)
+### Prerequisites
 
-If you need to manually add the policy to an existing ECR repository:
-
-```bash
-# Create policy file
-cat > ecr-policy.json << 'EOF'
-{
-    "Version": "2012-10-17",
-    "Statement": [
-        {
-            "Sid": "OmicsWorkflowAccess",
-            "Effect": "Allow",
-            "Principal": {
-                "Service": "omics.amazonaws.com"
-            },
-            "Action": [
-                "ecr:GetDownloadUrlForLayer",
-                "ecr:BatchGetImage",
-                "ecr:BatchCheckLayerAvailability"
-            ]
-        }
-    ]
-}
-EOF
-
-# Apply policy
-aws ecr set-repository-policy \
-  --repository-name quay/biocontainers/ensembl-vep \
-  --policy-text file://ecr-policy.json \
-  --region ${AWS_REGION}
-```
+- **Docker** must be installed and running on the machine where `cdk deploy` is executed
+- Docker daemon must have network access to pull from `quay.io`
 
 ## Directory Structure
 
 ```
 vep/
+├── docker/
+│   └── Dockerfile           # VEP container image (auto-pushed to ECR)
 ├── nextflow/
 │   ├── main.nf              # Main workflow file
+│   ├── nextflow.config      # Nextflow configuration
+│   ├── conf/
+│   │   └── omics.config     # HealthOmics-specific config
 │   └── modules/
 │       └── ensemblvep/
 │           └── main.nf      # VEP module
 ├── omics/
 │   └── workflow-param-desc.json  # Parameter template for HealthOmics
 └── test_data/
-    ├── sample_manifest_NA12878.csv    # Sample 1 manifest
-    ├── sample_manifest_NA12878_2.csv  # Sample 2 manifest
+    ├── sample_manifest_NA12878_2.csv  # Sample manifest for demo
     └── sample_manifest_with_test_data.csv  # Original test manifest
 ```
 
@@ -141,14 +111,14 @@ aws omics start-run \
     "vep_cache_version": "110",
     "vep_species": "homo_sapiens",
     "vep_genome": "GRCh38",
-    "ecr_registry": "123456789012.dkr.ecr.us-east-1.amazonaws.com",
+    "vep_container": "123456789012.dkr.ecr.us-east-1.amazonaws.com/cdk-xxx-container-assets-xxx:tag",
     "id": "sample_001"
   }'
 ```
 
 ### Triggered Automatically
 
-This workflow is automatically triggered by EventBridge when the upstream GATK-BP workflow completes successfully. The Lambda function (`post_initial_workflow_lambda`) passes the VCF output from GATK-BP as input to VEP.
+This workflow is automatically triggered by EventBridge when the upstream GATK-BP workflow completes successfully. The Lambda function (`post_initial_workflow_lambda`) passes the VCF output from GATK-BP as input to VEP, including the container image URI that was automatically deployed by CDK.
 
 ## VEP Cache
 

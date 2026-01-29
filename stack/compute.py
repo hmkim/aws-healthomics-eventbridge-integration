@@ -12,6 +12,7 @@ from aws_cdk import (
     aws_iam as iam,
     aws_s3_assets as s3_assets,
     aws_ecr as ecr,
+    aws_ecr_assets as ecr_assets,
     Aspects
 )
 
@@ -226,18 +227,18 @@ class omics_workflow_Stack(Stack):
         lambda_role.add_to_policy(lambda_omics_policy)
 
         ################################################################################################
-        #################################### ECR Repository for VEP ####################################
+        #################################### ECR Docker Image for VEP ##################################
 
-        # Create ECR repository for VEP container image
-        # The container image must be pushed to this repository before running the workflow
-        vep_ecr_repo = ecr.Repository(self, f"{APP_NAME}-vep-repo",
-            repository_name="quay/biocontainers/ensembl-vep",
-            removal_policy=RemovalPolicy.RETAIN
+        # Build and push VEP container image to ECR automatically
+        # The Dockerfile pulls the public biocontainers image and pushes to ECR
+        vep_docker_image = ecr_assets.DockerImageAsset(self, f"{APP_NAME}-vep-image",
+            directory="workflows/vep/docker",
+            platform=ecr_assets.Platform.LINUX_AMD64
         )
 
         # Add resource policy allowing HealthOmics service to pull images
         # Reference: https://docs.aws.amazon.com/omics/latest/dev/permissions-ecr.html
-        vep_ecr_repo.add_to_resource_policy(
+        vep_docker_image.repository.add_to_resource_policy(
             iam.PolicyStatement(
                 sid="OmicsWorkflowAccess",
                 effect=iam.Effect.ALLOW,
@@ -249,6 +250,9 @@ class omics_workflow_Stack(Stack):
                 ]
             )
         )
+
+        # Store the full image URI for use in Lambda environment variables
+        vep_container_image_uri = vep_docker_image.image_uri
 
         ################################################################################################
         #################################### Create HealthOmics Workflow ###############################
@@ -330,7 +334,7 @@ class omics_workflow_Stack(Stack):
                 "OUTPUT_S3_LOCATION": "s3://" + bucket_output.bucket_name + "/outputs",
                 "WORKFLOW_ID": private_workflow_cfn.attr_id,
                 "UPSTREAM_WORKFLOW_ID": READY2RUN_WORKFLOW_ID,
-                "ECR_REGISTRY": aws_account + ".dkr.ecr." + aws_region + ".amazonaws.com",
+                "VEP_CONTAINER_IMAGE": vep_container_image_uri,
                 "SPECIES": "homo_sapiens",
                 "DIR_CACHE": f"s3://aws-genomics-static-{aws_region}/omics-tutorials/data/databases/vep/",
                 "CACHE_VERSION": "110",
