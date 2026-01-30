@@ -386,11 +386,10 @@ class omics_workflow_Stack(Stack):
         ################################################################################################
         #################################### Notification Lambda for Completion ########################
 
-        # SES email configuration (verified email addresses required)
-        # To use SES, verify sender email in SES console first
-        # Replace with your verified SES email addresses
-        SES_SENDER_EMAIL = ""  # Must be verified in SES (e.g., sender@example.com)
-        SES_RECIPIENT_EMAIL = ""  # Must be verified in SES (e.g., recipient@example.com)
+        # Get notification settings from config
+        send_completion_notification = config.get("SEND_COMPLETION_NOTIFICATION", False)
+        ses_sender_email = config.get("SES_SENDER_EMAIL", "")
+        ses_recipient_email = config.get("SES_RECIPIENT_EMAIL", "")
 
         # Create Lambda function for workflow completion notifications
         # Sends HTML emails via SES with clickable presigned URLs
@@ -406,8 +405,9 @@ class omics_workflow_Stack(Stack):
                 "SNS_TOPIC_ARN": sns_topic.topic_arn,
                 "VEP_WORKFLOW_ID": private_workflow_cfn.attr_id,
                 "GATK_WORKFLOW_ID": READY2RUN_WORKFLOW_ID,
-                "SES_SENDER_EMAIL": SES_SENDER_EMAIL,
-                "SES_RECIPIENT_EMAIL": SES_RECIPIENT_EMAIL,
+                "SES_SENDER_EMAIL": ses_sender_email,
+                "SES_RECIPIENT_EMAIL": ses_recipient_email,
+                "SEND_COMPLETION_NOTIFICATION": str(send_completion_notification),
                 "LOG_LEVEL": "INFO"
             }
         )

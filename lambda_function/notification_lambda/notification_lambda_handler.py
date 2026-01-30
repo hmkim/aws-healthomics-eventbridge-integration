@@ -8,6 +8,8 @@ SNS_TOPIC_ARN = os.environ['SNS_TOPIC_ARN']
 VEP_WORKFLOW_ID = os.environ['VEP_WORKFLOW_ID']
 GATK_WORKFLOW_ID = os.environ['GATK_WORKFLOW_ID']
 LOG_LEVEL = os.environ.get('LOG_LEVEL', 'INFO')
+# Completion notification flag (set to 'True' to enable notifications for COMPLETED runs)
+SEND_COMPLETION_NOTIFICATION = os.environ.get('SEND_COMPLETION_NOTIFICATION', 'False').lower() == 'true'
 # SES configuration (optional - falls back to SNS if not configured)
 SES_SENDER_EMAIL = os.environ.get('SES_SENDER_EMAIL', '')
 SES_RECIPIENT_EMAIL = os.environ.get('SES_RECIPIENT_EMAIL', '')
@@ -336,6 +338,14 @@ def handler(event, context):
             return {
                 'statusCode': 200,
                 'message': f'Ignored event with status: {status}'
+            }
+
+        # Check if completion notifications are enabled
+        if not SEND_COMPLETION_NOTIFICATION:
+            logger.info("Completion notifications disabled (SEND_COMPLETION_NOTIFICATION=False)")
+            return {
+                'statusCode': 200,
+                'message': 'Completion notifications disabled'
             }
 
         # Get run details from HealthOmics
