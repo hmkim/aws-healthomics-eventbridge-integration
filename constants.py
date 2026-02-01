@@ -12,11 +12,11 @@ DEV_CONFIG = {
 
     # Notification Settings
     # Set to True to send email notifications when workflows complete successfully
-    "SEND_COMPLETION_NOTIFICATION": False,
+    "SEND_COMPLETION_NOTIFICATION": True,
     # SES email configuration (requires verified email addresses in SES)
     # Leave empty to disable SES emails (will use SNS only)
-    "SES_SENDER_EMAIL": "",      # e.g., "sender@example.com"
-    "SES_RECIPIENT_EMAIL": "",   # e.g., "recipient@example.com"
+    "SES_SENDER_EMAIL": "hyunmink+ses@amazon.com",
+    "SES_RECIPIENT_EMAIL": "hyunmink+ses@amazon.com",
 }
 
 

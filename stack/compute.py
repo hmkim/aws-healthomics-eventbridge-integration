@@ -13,6 +13,8 @@ from aws_cdk import (
     aws_s3_assets as s3_assets,
     aws_ecr as ecr,
     aws_ecr_assets as ecr_assets,
+    aws_codebuild as codebuild,
+    custom_resources as cr,
     Aspects
 )
 
@@ -249,16 +251,18 @@ class omics_workflow_Stack(Stack):
         ################################################################################################
         #################################### ECR Docker Image for VEP ##################################
 
-        # Build and push VEP container image to ECR automatically
-        # The Dockerfile pulls the public biocontainers image and pushes to ECR
-        vep_docker_image = ecr_assets.DockerImageAsset(self, f"{APP_NAME}-vep-image",
-            directory="workflows/vep/docker",
-            platform=ecr_assets.Platform.LINUX_AMD64
+        # Create a dedicated ECR repository for VEP (not using CDK bootstrap repo)
+        # This allows proper resource policy configuration for HealthOmics
+        vep_ecr_repo = ecr.Repository(self, f"{APP_NAME}-vep-repo",
+            repository_name=f"{APP_NAME}-vep",
+            removal_policy=RemovalPolicy.DESTROY,
+            empty_on_delete=True,
+            image_scan_on_push=True
         )
 
         # Add resource policy allowing HealthOmics service to pull images
         # Reference: https://docs.aws.amazon.com/omics/latest/dev/permissions-ecr.html
-        vep_docker_image.repository.add_to_resource_policy(
+        vep_ecr_repo.add_to_resource_policy(
             iam.PolicyStatement(
                 sid="OmicsWorkflowAccess",
                 effect=iam.Effect.ALLOW,
@@ -267,12 +271,92 @@ class omics_workflow_Stack(Stack):
                     "ecr:GetDownloadUrlForLayer",
                     "ecr:BatchGetImage",
                     "ecr:BatchCheckLayerAvailability"
-                ]
+                ],
+                conditions={
+                    "StringEquals": {
+                        "aws:SourceAccount": aws_account
+                    }
+                }
             )
         )
 
+        # CodeBuild project to build and push VEP Docker image to dedicated ECR repo
+        vep_build_project = codebuild.Project(self, f"{APP_NAME}-vep-build",
+            project_name=f"{APP_NAME}-vep-image-build",
+            environment=codebuild.BuildEnvironment(
+                build_image=codebuild.LinuxBuildImage.STANDARD_7_0,
+                privileged=True  # Required for Docker builds
+            ),
+            environment_variables={
+                "ECR_REPO_URI": codebuild.BuildEnvironmentVariable(value=vep_ecr_repo.repository_uri),
+                "AWS_ACCOUNT_ID": codebuild.BuildEnvironmentVariable(value=aws_account),
+                "AWS_REGION": codebuild.BuildEnvironmentVariable(value=aws_region)
+            },
+            build_spec=codebuild.BuildSpec.from_object({
+                "version": "0.2",
+                "phases": {
+                    "pre_build": {
+                        "commands": [
+                            "echo Logging in to Amazon ECR...",
+                            "aws ecr get-login-password --region $AWS_REGION | docker login --username AWS --password-stdin $AWS_ACCOUNT_ID.dkr.ecr.$AWS_REGION.amazonaws.com"
+                        ]
+                    },
+                    "build": {
+                        "commands": [
+                            "echo Building VEP Docker image...",
+                            "docker pull quay.io/biocontainers/ensembl-vep:106.1--pl5321h4a94de4_0",
+                            "docker tag quay.io/biocontainers/ensembl-vep:106.1--pl5321h4a94de4_0 $ECR_REPO_URI:latest",
+                            "docker tag quay.io/biocontainers/ensembl-vep:106.1--pl5321h4a94de4_0 $ECR_REPO_URI:106.1"
+                        ]
+                    },
+                    "post_build": {
+                        "commands": [
+                            "echo Pushing VEP image to ECR...",
+                            "docker push $ECR_REPO_URI:latest",
+                            "docker push $ECR_REPO_URI:106.1",
+                            "echo Build completed successfully"
+                        ]
+                    }
+                }
+            }),
+            timeout=Duration.minutes(30)
+        )
+
+        # Grant CodeBuild permission to push to ECR
+        vep_ecr_repo.grant_pull_push(vep_build_project)
+
+        # Custom Resource to trigger CodeBuild during deployment
+        trigger_build = cr.AwsCustomResource(self, f"{APP_NAME}-trigger-vep-build",
+            on_create=cr.AwsSdkCall(
+                service="CodeBuild",
+                action="startBuild",
+                parameters={
+                    "projectName": vep_build_project.project_name
+                },
+                physical_resource_id=cr.PhysicalResourceId.of(f"{APP_NAME}-vep-build-trigger")
+            ),
+            on_update=cr.AwsSdkCall(
+                service="CodeBuild",
+                action="startBuild",
+                parameters={
+                    "projectName": vep_build_project.project_name
+                },
+                physical_resource_id=cr.PhysicalResourceId.of(f"{APP_NAME}-vep-build-trigger")
+            ),
+            policy=cr.AwsCustomResourcePolicy.from_statements([
+                iam.PolicyStatement(
+                    actions=["codebuild:StartBuild"],
+                    resources=[vep_build_project.project_arn]
+                )
+            ])
+        )
+
+        # Ensure build is triggered after ECR repo is created
+        trigger_build.node.add_dependency(vep_ecr_repo)
+        trigger_build.node.add_dependency(vep_build_project)
+
         # Store the full image URI for use in Lambda environment variables
-        vep_container_image_uri = vep_docker_image.image_uri
+        vep_container_image_uri = f"{vep_ecr_repo.repository_uri}:latest"
 
         ################################################################################################
         #################################### Create HealthOmics Workflow ###############################
