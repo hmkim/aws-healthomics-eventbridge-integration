@@ -403,6 +403,44 @@ body {
     color: var(--text-muted);
 }
 
+.badge-not_started {
+    background: rgba(158, 158, 158, 0.08);
+    color: var(--text-muted);
+    border: 1px dashed rgba(158, 158, 158, 0.3);
+}
+
+.badge-gatk_running,
+.badge-vep_running {
+    background: rgba(33, 150, 243, 0.12);
+    color: var(--info);
+}
+
+.badge-gatk_completed,
+.badge-vep_completed {
+    background: rgba(33, 150, 243, 0.08);
+    color: #1565c0;
+}
+
+.badge-completed_approved {
+    background: rgba(76, 175, 80, 0.12);
+    color: var(--success);
+}
+
+.badge-completed_rejected {
+    background: rgba(229, 57, 53, 0.12);
+    color: var(--danger);
+}
+
+.badge-workflow_failed {
+    background: rgba(229, 57, 53, 0.12);
+    color: var(--danger);
+}
+
+.badge-type {
+    background: rgba(103, 58, 183, 0.10);
+    color: #5e35b1;
+}
+
 /* Timeline */
 .timeline {
     position: relative;
@@ -757,6 +795,69 @@ body {
         opacity: 1;
         transform: translateX(0);
     }
+}
+
+/* Samples Table */
+.samples-table-container {
+    overflow-x: auto;
+    background: var(--card-bg);
+    border-radius: var(--radius-lg);
+    box-shadow: var(--shadow-sm);
+    border: 1px solid var(--border-color);
+}
+
+.samples-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 0.9375rem;
+}
+
+.samples-table thead {
+    background: var(--body-bg);
+    border-bottom: 2px solid var(--border-color);
+}
+
+.samples-table th {
+    padding: 14px 16px;
+    text-align: left;
+    font-weight: 600;
+    font-size: 0.8125rem;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    color: var(--text-secondary);
+    white-space: nowrap;
+}
+
+.samples-table td {
+    padding: 14px 16px;
+    border-bottom: 1px solid var(--border-color);
+    color: var(--text-primary);
+}
+
+.samples-table tbody tr:last-child td {
+    border-bottom: none;
+}
+
+.samples-table tbody tr:hover {
+    background: rgba(25, 118, 210, 0.03);
+}
+
+.samples-table code {
+    font-size: 0.875rem;
+    font-weight: 600;
+}
+
+.desc-cell {
+    max-width: 220px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    color: var(--text-secondary);
+    font-size: 0.875rem;
+}
+
+.text-muted {
+    color: var(--text-muted);
 }
 
 /* Responsive */

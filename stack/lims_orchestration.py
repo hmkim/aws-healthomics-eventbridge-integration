@@ -57,6 +57,15 @@ class LimsOrchestrationStack(Stack):
             projection_type=dynamodb.ProjectionType.ALL,
         )
 
+        # LIMS sample registry table
+        lims_samples_table = dynamodb.Table(
+            self, f"{APP_NAME}-lims-samples",
+            table_name="LimsSamples",
+            partition_key=dynamodb.Attribute(name="SampleID", type=dynamodb.AttributeType.STRING),
+            billing_mode=dynamodb.BillingMode.PAY_PER_REQUEST,
+            removal_policy=RemovalPolicy.DESTROY,
+        )
+
         # Task tokens table for HealthOmics -> Step Functions callback
         task_tokens_table = dynamodb.Table(
             self, f"{APP_NAME}-task-tokens",
@@ -81,6 +90,7 @@ class LimsOrchestrationStack(Stack):
         # DynamoDB access
         workflow_state_table.grant_read_write_data(orchestration_lambda_role)
         task_tokens_table.grant_read_write_data(orchestration_lambda_role)
+        lims_samples_table.grant_read_data(orchestration_lambda_role)
 
         # HealthOmics access
         orchestration_lambda_role.add_to_policy(iam.PolicyStatement(
@@ -243,6 +253,20 @@ class LimsOrchestrationStack(Stack):
             role=orchestration_lambda_role,
             timeout=Duration.seconds(30),
             environment=common_env,
+        )
+
+        # LIMS Samples Lambda
+        lims_samples_lambda = lambda_.Function(
+            self, f"{APP_NAME}-list-samples",
+            runtime=lambda_.Runtime.PYTHON_3_12,
+            handler="lims_samples.handler",
+            code=lambda_.Code.from_asset("lambda_function/lims_samples"),
+            role=orchestration_lambda_role,
+            timeout=Duration.seconds(30),
+            environment={
+                **common_env,
+                "LIMS_SAMPLES_TABLE": lims_samples_table.table_name,
+            },
         )
 
         # Workflow Status Handler Lambda (EventBridge -> Step Functions callback)
@@ -433,6 +457,16 @@ class LimsOrchestrationStack(Stack):
         pending_resource.add_method(
             "GET",
             apigw.LambdaIntegration(pending_approvals_lambda),
+        )
+
+        # /v1/lims
+        lims_resource = api.root.add_resource("lims")
+
+        # GET /v1/lims/samples
+        lims_samples_resource = lims_resource.add_resource("samples")
+        lims_samples_resource.add_method(
+            "GET",
+            apigw.LambdaIntegration(lims_samples_lambda),
         )
 
         ################################################################################################

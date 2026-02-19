@@ -1,4 +1,5 @@
 import boto3
+from botocore.config import Config
 import os
 import json
 import logging
@@ -14,7 +15,10 @@ VEP_CACHE_VERSION = os.environ.get('VEP_CACHE_VERSION', '110')
 VEP_GENOME = os.environ.get('VEP_GENOME', 'GRCh38')
 LOG_LEVEL = os.environ.get('LOG_LEVEL', 'INFO')
 
-omics = boto3.client('omics')
+# StartRun TPS quota is 1.0 — use adaptive retry with generous backoff
+omics = boto3.client('omics', config=Config(
+    retries={'mode': 'adaptive', 'max_attempts': 10},
+))
 s3 = boto3.client('s3')
 
 logging.basicConfig(level=LOG_LEVEL)

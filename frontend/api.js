@@ -41,4 +41,24 @@ const ApiClient = {
             reason,
         });
     },
+
+    getLimsSamples() {
+        return this.request('GET', '/lims/samples');
+    },
+
+    startPipeline(sample) {
+        return this.request('POST', '/analysis/start', {
+            source: sample.Source || 'ClarityLIMS_Mock',
+            event_type: 'StepCompleted',
+            data: {
+                project_id: sample.ProjectID,
+                sample_id: sample.SampleID,
+                patient_id: sample.PatientID,
+                submitter_email: sample.SubmitterEmail,
+                fastq_paths: { r1: sample.FastqR1, r2: sample.FastqR2 },
+                reference_genome: sample.ReferenceGenome,
+                analysis_type: sample.AnalysisType,
+            },
+        });
+    },
 };

@@ -46,6 +46,9 @@ def handler(event, context):
     for item in items:
         item.pop('ApprovalToken', None)
 
+    # Sort by most recent activity (UpdatedAt or Timestamp)
+    items.sort(key=lambda r: r.get('UpdatedAt') or r.get('Timestamp', ''), reverse=True)
+
     return _response(200, {
         'sample_id': sample_id,
         'records': items,

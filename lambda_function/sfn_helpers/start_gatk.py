@@ -1,4 +1,5 @@
 import boto3
+from botocore.config import Config
 import os
 import json
 import logging
@@ -9,7 +10,10 @@ OUTPUT_S3_LOCATION = os.environ['OUTPUT_S3_LOCATION']
 GATK_WORKFLOW_ID = os.environ['GATK_WORKFLOW_ID']
 LOG_LEVEL = os.environ.get('LOG_LEVEL', 'INFO')
 
-omics = boto3.client('omics')
+# StartRun TPS quota is 1.0 — use adaptive retry with generous backoff
+omics = boto3.client('omics', config=Config(
+    retries={'mode': 'adaptive', 'max_attempts': 10},
+))
 
 logging.basicConfig(level=LOG_LEVEL)
 logger = logging.getLogger(__name__)

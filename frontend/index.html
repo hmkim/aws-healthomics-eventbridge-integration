@@ -19,6 +19,7 @@
         </div>
 
         <div class="nav-items">
+            <button class="nav-item" data-view="samples">LIMS Samples</button>
             <button class="nav-item active" data-view="status">Pipeline Status</button>
             <button class="nav-item" data-view="approvals">Pending Approvals</button>
         </div>
@@ -35,6 +36,21 @@
 
     <!-- Main Content -->
     <main class="main">
+        <!-- LIMS Samples View -->
+        <div class="view" id="samples-view">
+            <div class="view-header">
+                <h1 class="view-title">LIMS Samples</h1>
+                <p class="view-subtitle">Registered samples from LIMS. Click "Run Pipeline" to start genomic analysis.</p>
+            </div>
+
+            <div id="samples-list">
+                <div class="loading-state">
+                    <div class="spinner"></div>
+                    <p class="loading-text">Loading samples...</p>
+                </div>
+            </div>
+        </div>
+
         <!-- Pipeline Status View -->
         <div class="view active" id="status-view">
             <div class="view-header">

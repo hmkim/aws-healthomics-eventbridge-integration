@@ -1,12 +1,23 @@
 import os
+import boto3
 from aws_cdk import Environment
 
 
+def _get_account_id():
+    """Resolve AWS account ID from environment or STS."""
+    acct = os.environ.get("CDK_DEFAULT_ACCOUNT")
+    if acct:
+        return acct
+    try:
+        return boto3.client("sts").get_caller_identity()["Account"]
+    except Exception:
+        return None
 
-# Dev Environment
+
+# Dev Environment (us-east-1 - HealthOmics Ready2Run workflows are only available here)
 DEV_ENV = Environment(
-    account=os.environ.get("CDK_DEFAULT_ACCOUNT"),
-    region=os.environ.get("CDK_DEFAULT_REGION", "us-east-1"),
+    account=_get_account_id(),
+    region="us-east-1",
 )
 DEV_CONFIG = {
     "AWS_REGION": 'us-east-1',

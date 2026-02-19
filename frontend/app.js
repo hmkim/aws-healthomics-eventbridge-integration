@@ -7,6 +7,7 @@
     const state = {
         currentView: 'status',
         pendingApprovals: [],
+        limsSamples: [],
         selectedApproval: null,
         approvalDecision: null,
         isLoading: false,
@@ -43,6 +44,7 @@
         elements.approvalReasonInput = document.getElementById('approval-reason');
         elements.approvalSubmitBtn = document.getElementById('approval-submit-btn');
         elements.toastContainer = document.getElementById('toast-container');
+        elements.samplesList = document.getElementById('samples-list');
     }
 
     // Load settings from localStorage (with config.js fallback for CloudFront deployment)
@@ -124,7 +126,9 @@
         });
 
         // Load data for specific views
-        if (viewName === 'approvals') {
+        if (viewName === 'samples') {
+            loadLimsSamples();
+        } else if (viewName === 'approvals') {
             loadPendingApprovals();
         }
     }
@@ -180,10 +184,130 @@
             const data = await ApiClient.getStatus(sampleId);
             elements.searchResults.innerHTML = renderStatusResult(data);
         } catch (error) {
-            elements.searchResults.innerHTML = renderError(
-                error.message || 'Failed to fetch sample status'
+            if (error.status === 404) {
+                elements.searchResults.innerHTML = renderStatusResult({ sample_id: sampleId, records: [], count: 0 });
+            } else {
+                elements.searchResults.innerHTML = renderError(
+                    error.message || 'Failed to fetch sample status'
+                );
+            }
+        }
+    }
+
+    // Load LIMS samples
+    async function loadLimsSamples() {
+        if (!ApiClient.baseUrl) {
+            elements.samplesList.innerHTML = renderError(
+                'Please configure API settings to view LIMS samples'
+            );
+            return;
+        }
+
+        elements.samplesList.innerHTML = renderLoading();
+
+        try {
+            const data = await ApiClient.getLimsSamples();
+            state.limsSamples = data.samples || [];
+            elements.samplesList.innerHTML = renderSamplesList(state.limsSamples);
+            bindSampleButtons();
+        } catch (error) {
+            elements.samplesList.innerHTML = renderError(
+                error.message || 'Failed to fetch LIMS samples'
             );
         }
+    }
+
+    // Bind sample action buttons
+    function bindSampleButtons() {
+        document.querySelectorAll('[data-action="run-pipeline"]').forEach(btn => {
+            btn.addEventListener('click', () => handleRunPipeline(btn));
+        });
+    }
+
+    // Handle Run Pipeline button click
+    async function handleRunPipeline(btn) {
+        const sampleId = btn.dataset.sampleId;
+        const sample = state.limsSamples.find(s => s.SampleID === sampleId);
+        if (!sample) return;
+
+        if (!confirm(`Start genomic analysis pipeline for ${sampleId}?\n\nThis will launch GATK and VEP workflows on AWS HealthOmics (cost applies).`)) {
+            return;
+        }
+
+        btn.disabled = true;
+        btn.textContent = 'Starting...';
+
+        try {
+            await ApiClient.startPipeline(sample);
+            showToast(`Pipeline started for ${sampleId}`, 'success');
+            // Refresh the list to show updated status
+            loadLimsSamples();
+        } catch (error) {
+            showToast(error.message || `Failed to start pipeline for ${sampleId}`, 'error');
+            btn.disabled = false;
+            btn.textContent = 'Run Pipeline';
+        }
+    }
+
+    // Render samples list
+    function renderSamplesList(samples) {
+        if (samples.length === 0) {
+            return `
+                <div class="empty-state">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/>
+                        <polyline points="14 2 14 8 20 8"/>
+                    </svg>
+                    <p class="empty-state-title">No samples registered</p>
+                    <p class="empty-state-text">No samples found in the LIMS registry</p>
+                </div>
+            `;
+        }
+
+        return `
+            <div class="samples-table-container">
+                <table class="samples-table">
+                    <thead>
+                        <tr>
+                            <th>Sample ID</th>
+                            <th>Project</th>
+                            <th>Type</th>
+                            <th>Submitter</th>
+                            <th>Description</th>
+                            <th>Pipeline Status</th>
+                            <th>Action</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        ${samples.map(s => renderSampleRow(s)).join('')}
+                    </tbody>
+                </table>
+            </div>
+        `;
+    }
+
+    // Render a single sample row
+    function renderSampleRow(sample) {
+        const status = sample.PipelineStatus || 'NOT_STARTED';
+        const statusClass = status.toLowerCase().replace(/ /g, '_');
+        const canRun = status === 'NOT_STARTED' || status === 'WORKFLOW_FAILED';
+
+        return `
+            <tr>
+                <td><code>${escapeHtml(sample.SampleID)}</code></td>
+                <td>${escapeHtml(sample.ProjectID)}</td>
+                <td><span class="badge badge-type">${escapeHtml(sample.AnalysisType || 'WGS')}</span></td>
+                <td>${escapeHtml(sample.SubmitterEmail)}</td>
+                <td class="desc-cell">${escapeHtml(sample.Description || '')}</td>
+                <td><span class="badge badge-${statusClass}">${escapeHtml(status)}</span></td>
+                <td>
+                    ${canRun
+                        ? `<button class="btn btn-primary btn-sm" data-action="run-pipeline" data-sample-id="${escapeHtml(sample.SampleID)}">Run Pipeline</button>`
+                        : `<span class="text-muted">-</span>`
+                    }
+                </td>
+            </tr>
+        `;
     }
 
     // Load pending approvals
