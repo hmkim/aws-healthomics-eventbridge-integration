@@ -14,7 +14,7 @@
         "TableName": "${WorkflowStateTable}",
         "Item": {
           "SampleID": { "S.$": "$.sample_id" },
-          "Timestamp": { "S.$": "$$.State.EnteredTime" },
+          "Timestamp": { "S.$": "$$.Execution.StartTime" },
           "ProjectID": { "S.$": "$.project_id" },
           "SubmitterEmail": { "S.$": "$.submitter_email" },
           "ReferenceGenome": { "S.$": "$.reference_genome" },

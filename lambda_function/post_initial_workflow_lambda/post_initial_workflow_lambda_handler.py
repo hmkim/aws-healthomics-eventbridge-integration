@@ -1,4 +1,5 @@
 import boto3
+from botocore.config import Config
 import os
 from botocore.exceptions import ClientError
 import logging
@@ -15,7 +16,10 @@ VEP_CACHE_VERSION = os.environ['CACHE_VERSION']
 VEP_GENOME = os.environ['GENOME']
 LOG_LEVEL = os.environ['LOG_LEVEL']
 
-omics = boto3.client('omics')
+# StartRun TPS quota is 1.0 — use adaptive retry with generous backoff
+omics = boto3.client('omics', config=Config(
+    retries={'mode': 'adaptive', 'max_attempts': 10},
+))
 s3 = boto3.client('s3')
 
 # enable logging 
@@ -61,13 +65,24 @@ def handler(event, context, omics_client=omics, s3_client=s3):
     event_detail_type = event['detail-type']
     if event_detail_type != 'Run Status Change':
         raise("Unknown event triggered this Lambda, unable to process")
-    
+
     # Get the omics run ID
     omics_run_id = event['detail']['arn'].split('/')[-1]
     logging.info(f"Omics Run ID: {omics_run_id}")
-    
+
     # Get the omics run details
     omics_workflow_run  = omics_client.get_run(id=omics_run_id)
+
+    # Skip runs managed by Step Functions (LIMS orchestration pipeline)
+    tags = omics_workflow_run.get('tags', {})
+    if tags.get('SOURCE') == 'STEP_FUNCTIONS':
+        logging.info(f"Run {omics_run_id} is managed by Step Functions, skipping")
+        return {
+            'statusCode': 200,
+            'runStatus': "Skipped - run managed by Step Functions (LIMS orchestration)",
+            'runIds': []
+        }
+
     omics_workflowId = omics_workflow_run['workflowId']
     if omics_workflowId == UPSTREAM_WORKFLOW_ID:
         logging.info(f"Omics Workflow ID: {omics_workflowId} matched, continue processing")
