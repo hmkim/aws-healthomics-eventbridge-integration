@@ -29,13 +29,13 @@ import cdk_nag
 ###########################################################################################################
 
 
-class omics_workflow_Stack(Stack):
+class OmicsWorkflowStack(Stack):
 
     def __init__(self, scope: Construct, construct_id: str, config, **kwargs) -> None:
         super().__init__(scope, construct_id, **kwargs)
 
-        aws_account = os.environ["CDK_DEFAULT_ACCOUNT"]
-        aws_region = os.environ["CDK_DEFAULT_REGION"]
+        aws_account = self.account
+        aws_region = self.region
 
         # Prefix for all resource names
         APP_NAME = f"healthomics"
@@ -502,6 +502,16 @@ class omics_workflow_Stack(Stack):
         # The notification lambda uses the same EventBridge rule as second_workflow_lambda
         # since both need to respond to COMPLETED events
         rule_second_workflow_lambda.add_target(events_targets.LambdaFunction(notification_lambda))
+
+        # Expose key resources for cross-stack references
+        self.bucket_input = bucket_input
+        self.bucket_output = bucket_output
+        self.omics_role = omics_role
+        self.lambda_role = lambda_role
+        self.sns_topic = sns_topic
+        self.vep_workflow_id = private_workflow_cfn.attr_id
+        self.gatk_workflow_id = READY2RUN_WORKFLOW_ID
+        self.vep_container_image_uri = vep_container_image_uri
 
         #Aspects.of(self).add(cdk_nag.AwsSolutionsChecks())
  

@@ -1,0 +1,16 @@
+{
+  "source": "ClarityLIMS",
+  "event_type": "StepCompleted",
+  "data": {
+    "project_id": "TEST-PROJ-001",
+    "sample_id": "TEST-SAM-001",
+    "patient_id": "PAT-HASH-ABC123",
+    "analysis_type": "WGS",
+    "fastq_paths": {
+      "r1": "s3://test-input-bucket/TEST-PROJ-001/TEST-SAM-001_R1_001.fastq.gz",
+      "r2": "s3://test-input-bucket/TEST-PROJ-001/TEST-SAM-001_R2_001.fastq.gz"
+    },
+    "reference_genome": "hg38",
+    "submitter_email": "researcher@lab.org"
+  }
+}

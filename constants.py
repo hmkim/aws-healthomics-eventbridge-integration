@@ -4,9 +4,12 @@ from aws_cdk import Environment
 
 
 # Dev Environment
-DEV_ENV = Environment( account=os.environ["CDK_DEFAULT_ACCOUNT"], region=os.environ["CDK_DEFAULT_REGION"])
+DEV_ENV = Environment(
+    account=os.environ.get("CDK_DEFAULT_ACCOUNT"),
+    region=os.environ.get("CDK_DEFAULT_REGION", "us-east-1"),
+)
 DEV_CONFIG = {
-    "AWS_REGION" :  'us-east-1',
+    "AWS_REGION": 'us-east-1',
     "AWS_BUCKET" :  'omics-eventbridge-solution-dev',
     "JOB_TIMEOUT" : 1500,  # seconds
 
@@ -17,7 +20,8 @@ DEV_CONFIG = {
     # Leave empty to disable SES emails (will use SNS only)
     "SES_SENDER_EMAIL": "",  # e.g., "sender@example.com"
     "SES_RECIPIENT_EMAIL": "",  # e.g., "recipient@example.com"
+
+    # LIMS Orchestration Settings
+    "ADMIN_EMAIL": "",  # e.g., "admin@example.com" - receives approval requests
+    "APPROVAL_TIMEOUT_DAYS": 7,  # days before approval request times out
 }
-
-
- 

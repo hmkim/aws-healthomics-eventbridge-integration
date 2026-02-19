@@ -8,9 +8,9 @@ cdk.out/
 node_modules/
  
 
-# TypeScript compiled code
-*.js
+# TypeScript compiled code (except frontend)
 *.d.ts
+!frontend/*.js
 
 # Python Byte-compiled
 *.py[cod]
@@ -52,3 +52,9 @@ cdk.out
 stack/__pycache__
 **/*.old
 **/.DS_Store
+
+# Deployment logs (may contain sensitive info)
+DEPLOYMENT_LOG.md
+
+# Swap files
+*.swp
