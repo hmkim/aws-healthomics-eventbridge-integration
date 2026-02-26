@@ -2,7 +2,12 @@ import boto3
 import os
 import json
 import logging
+import sys
 from datetime import datetime, timezone
+
+# Add shared layer to path
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'shared'))
+from auth_middleware import require_auth, cors_headers
 
 LOG_LEVEL = os.environ.get('LOG_LEVEL', 'INFO')
 WORKFLOW_STATE_TABLE = os.environ.get('WORKFLOW_STATE_TABLE', 'GenomicWorkflowState')
@@ -15,9 +20,12 @@ logging.basicConfig(level=LOG_LEVEL)
 logger = logging.getLogger(__name__)
 
 
+@require_auth('admin')
 def handler(event, context):
     """Handles admin approval/rejection decisions for genomic analysis results."""
-    logger.info(f"Received event: {json.dumps(event)}")
+    auth = event['auth']
+    org_id = auth['organization_id']
+    logger.info(f"Approval handler for org={org_id}")
 
     try:
         body = event.get('body')
@@ -27,7 +35,7 @@ def handler(event, context):
         sample_id = body.get('sample_id')
         decision = body.get('decision', '').upper()
         reason = body.get('reason', '')
-        approved_by = body.get('approved_by', 'unknown')
+        approved_by = body.get('approved_by') or auth.get('display_name') or auth.get('email', 'unknown')
 
         if not sample_id:
             return _error_response(400, 'Missing required field: sample_id')
@@ -49,6 +57,10 @@ def handler(event, context):
                 break
 
         if not approval_item:
+            return _error_response(404, f'No pending approval found for sample {sample_id}')
+
+        # Verify the sample belongs to the caller's organization
+        if approval_item.get('OrganizationID') != org_id:
             return _error_response(404, f'No pending approval found for sample {sample_id}')
 
         task_token = approval_item['ApprovalToken']
@@ -97,10 +109,7 @@ def handler(event, context):
 
         return {
             'statusCode': 200,
-            'headers': {
-                'Content-Type': 'application/json',
-                'Access-Control-Allow-Origin': '*',
-            },
+            'headers': cors_headers(),
             'body': json.dumps({
                 'message': f'Sample {sample_id} {decision.lower()}',
                 'sample_id': sample_id,
@@ -125,9 +134,6 @@ def handler(event, context):
 def _error_response(status_code, message):
     return {
         'statusCode': status_code,
-        'headers': {
-            'Content-Type': 'application/json',
-            'Access-Control-Allow-Origin': '*',
-        },
+        'headers': cors_headers(),
         'body': json.dumps({'error': message}),
     }

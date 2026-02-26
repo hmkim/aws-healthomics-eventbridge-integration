@@ -58,3 +58,20 @@ DEPLOYMENT_LOG.md
 
 # Swap files
 *.swp
+
+# CDK context (may contain account-specific cached lookups)
+cdk.context.json
+
+# IDE
+.idea/
+*.iml
+
+# Claude Code
+CLAUDE.md
+.claude/
+
+# Internal docs
+docs/presentation-draft.md
+
+# Local config overrides
+constants.local.py

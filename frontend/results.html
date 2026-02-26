@@ -1,0 +1,82 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="description" content="Approved Results - View and distribute approved genomic analysis results">
+    <title>Approved Results | LIMS Genomics Dashboard</title>
+    <link rel="stylesheet" href="styles.css">
+    <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>&#x1F9EC;</text></svg>">
+</head>
+<body>
+    <!-- Navigation (rendered by Nav.init()) -->
+    <nav class="nav"></nav>
+
+    <!-- Main Content -->
+    <main class="main">
+        <div class="view active">
+            <div class="view-header">
+                <h1 class="view-title">Approved Results</h1>
+                <p class="view-subtitle">View approved analysis results and send download links</p>
+            </div>
+
+            <div id="results-list">
+                <div class="loading-state">
+                    <div class="spinner"></div>
+                    <p class="loading-text">Loading approved results...</p>
+                </div>
+            </div>
+        </div>
+    </main>
+
+    <!-- Send Email Modal -->
+    <div class="modal-backdrop" id="send-email-modal">
+        <div class="modal">
+            <div class="modal-header">
+                <h2 class="modal-title">Send Results Email</h2>
+                <button class="modal-close" type="button" aria-label="Close">
+                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                        <line x1="18" y1="6" x2="6" y2="18"/>
+                        <line x1="6" y1="6" x2="18" y2="18"/>
+                    </svg>
+                </button>
+            </div>
+            <form id="send-email-form">
+                <div class="modal-body">
+                    <p style="margin-bottom: 12px; color: var(--text-secondary);">
+                        Sample ID: <strong id="modal-sample-id" style="color: var(--text-primary); font-family: var(--font-mono);"></strong>
+                    </p>
+                    <div class="form-group" style="margin-bottom: 16px;">
+                        <label class="form-label">Submitter (auto-included)</label>
+                        <input type="text" class="form-input" id="modal-submitter-email" disabled
+                               style="background: var(--bg-secondary); color: var(--text-muted);">
+                    </div>
+                    <div class="form-group">
+                        <label class="form-label" for="additional-emails">Additional Recipients (comma-separated)</label>
+                        <input type="text" class="form-input" id="additional-emails"
+                               placeholder="user1@example.com, user2@example.com">
+                    </div>
+                    <p style="margin-top: 12px; font-size: 0.8rem; color: var(--text-muted);">
+                        Download links will expire in 24 hours.
+                    </p>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-secondary" data-dismiss="modal">Cancel</button>
+                    <button type="submit" class="btn btn-primary" id="send-email-btn">Send</button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <!-- Toast Container -->
+    <div class="toast-container" id="toast-container"></div>
+
+    <!-- Scripts -->
+    <script src="config.js"></script>
+    <script src="shared/ui.js"></script>
+    <script src="shared/auth.js"></script>
+    <script src="shared/api.js"></script>
+    <script src="shared/nav.js"></script>
+    <script src="results.js"></script>
+</body>
+</html>

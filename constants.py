@@ -29,10 +29,20 @@ DEV_CONFIG = {
     "SEND_COMPLETION_NOTIFICATION": False,
     # SES email configuration (requires verified email addresses in SES)
     # Leave empty to disable SES emails (will use SNS only)
-    "SES_SENDER_EMAIL": "",  # e.g., "sender@example.com"
-    "SES_RECIPIENT_EMAIL": "",  # e.g., "recipient@example.com"
+    "SES_SENDER_EMAIL": "",
+    "SES_RECIPIENT_EMAIL": "",
 
     # LIMS Orchestration Settings
-    "ADMIN_EMAIL": "",  # e.g., "admin@example.com" - receives approval requests
+    "ADMIN_EMAIL": "",
     "APPROVAL_TIMEOUT_DAYS": 7,  # days before approval request times out
+
+    # Frontend URL (CloudFront domain) - used for CORS allowed origin
+    # Set after first 'cdk deploy lims-frontend'; leave empty to allow all origins
+    "FRONTEND_URL": "",
+
+    # Cognito Settings
+    # Domain prefix must be globally unique across all AWS accounts
+    # Default: "lims-genomics-{account_id}" (set in cognito_auth.py)
+    # Override here if you want a custom prefix
+    # "COGNITO_DOMAIN_PREFIX": "my-custom-lims-prefix",
 }

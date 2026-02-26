@@ -11,12 +11,32 @@ os.environ['WORKFLOW_STATE_TABLE'] = 'TestWorkflowState'
 os.environ['LOG_LEVEL'] = 'DEBUG'
 os.environ['AWS_DEFAULT_REGION'] = 'us-east-1'
 
-# Add lims_samples to path
+# Add lims_samples and shared to path
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'lambda_function', 'lims_samples'))
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'lambda_function', 'shared'))
 
 # Patch boto3 resource before importing
 with patch('boto3.resource') as mock_resource:
     import lims_samples
+
+ORG_ID = 'ORG-TEST'
+
+
+def _auth_event(org_id=ORG_ID, groups='["operator"]'):
+    """Build an event with Cognito auth claims."""
+    return {
+        'requestContext': {
+            'authorizer': {
+                'claims': {
+                    'sub': 'test-user',
+                    'email': 'test@example.com',
+                    'organization_id': org_id,
+                    'cognito:groups': groups,
+                    'custom:display_name': 'Test User',
+                }
+            }
+        }
+    }
 
 
 def _mock_tables():
@@ -35,7 +55,7 @@ class TestStatusOrdering:
         """NA12878-U0a scenario: INITIALIZED has newer Timestamp but GATK_RUNNING has newer UpdatedAt."""
         mock_lims, mock_state = _mock_tables()
 
-        mock_lims.scan.return_value = {
+        mock_lims.query.return_value = {
             'Items': [
                 {'SampleID': 'NA12878-U0a', 'ProjectID': 'PROJ-NA12878', 'RegisteredAt': '2026-01-15T10:00:00Z'},
             ]
@@ -60,7 +80,7 @@ class TestStatusOrdering:
             ]
         }
 
-        result = lims_samples.handler({}, {})
+        result = lims_samples.handler(_auth_event(), {})
         body = json.loads(result['body'])
 
         assert result['statusCode'] == 200
@@ -73,7 +93,7 @@ class TestStatusOrdering:
         """VEP_RUNNING should be shown when it has the most recent UpdatedAt."""
         mock_lims, mock_state = _mock_tables()
 
-        mock_lims.scan.return_value = {
+        mock_lims.query.return_value = {
             'Items': [
                 {'SampleID': 'SAM-001', 'ProjectID': 'PROJ-001', 'RegisteredAt': '2026-01-10T10:00:00Z'},
             ]
@@ -105,7 +125,7 @@ class TestStatusOrdering:
             ]
         }
 
-        result = lims_samples.handler({}, {})
+        result = lims_samples.handler(_auth_event(), {})
         body = json.loads(result['body'])
 
         sample = body['samples'][0]
@@ -116,14 +136,14 @@ class TestStatusOrdering:
         """Samples without any pipeline records should show NOT_STARTED."""
         mock_lims, mock_state = _mock_tables()
 
-        mock_lims.scan.return_value = {
+        mock_lims.query.return_value = {
             'Items': [
                 {'SampleID': 'SAM-NEW', 'ProjectID': 'PROJ-NEW', 'RegisteredAt': '2026-02-19T00:00:00Z'},
             ]
         }
         mock_state.query.return_value = {'Items': []}
 
-        result = lims_samples.handler({}, {})
+        result = lims_samples.handler(_auth_event(), {})
         body = json.loads(result['body'])
 
         sample = body['samples'][0]
@@ -134,7 +154,7 @@ class TestStatusOrdering:
         """When UpdatedAt is missing, fall back to Timestamp for ordering."""
         mock_lims, mock_state = _mock_tables()
 
-        mock_lims.scan.return_value = {
+        mock_lims.query.return_value = {
             'Items': [
                 {'SampleID': 'SAM-OLD', 'ProjectID': 'PROJ-OLD', 'RegisteredAt': '2026-01-01T00:00:00Z'},
             ]
@@ -156,7 +176,7 @@ class TestStatusOrdering:
             ]
         }
 
-        result = lims_samples.handler({}, {})
+        result = lims_samples.handler(_auth_event(), {})
         body = json.loads(result['body'])
 
         sample = body['samples'][0]
@@ -170,7 +190,7 @@ class TestSampleSorting:
     def test_not_started_samples_listed_first(self):
         mock_lims, mock_state = _mock_tables()
 
-        mock_lims.scan.return_value = {
+        mock_lims.query.return_value = {
             'Items': [
                 {'SampleID': 'SAM-RUNNING', 'ProjectID': 'PROJ-1', 'RegisteredAt': '2026-01-01T00:00:00Z'},
                 {'SampleID': 'SAM-NEW', 'ProjectID': 'PROJ-2', 'RegisteredAt': '2026-01-02T00:00:00Z'},
@@ -186,7 +206,7 @@ class TestSampleSorting:
             {'Items': []},
         ]
 
-        result = lims_samples.handler({}, {})
+        result = lims_samples.handler(_auth_event(), {})
         body = json.loads(result['body'])
 
         assert body['count'] == 2
@@ -199,9 +219,9 @@ class TestErrorHandling:
 
     def test_dynamodb_error_returns_500(self):
         mock_lims, _ = _mock_tables()
-        mock_lims.scan.side_effect = Exception("DynamoDB connection error")
+        mock_lims.query.side_effect = Exception("DynamoDB connection error")
 
-        result = lims_samples.handler({}, {})
+        result = lims_samples.handler(_auth_event(), {})
 
         assert result['statusCode'] == 500
         body = json.loads(result['body'])

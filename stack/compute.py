@@ -155,11 +155,11 @@ class OmicsWorkflowStack(Stack):
         omics_role.add_to_policy(omics_logging_policy)
     
         omics_kms_policy = iam.PolicyStatement(
-            actions = [ 
-                'kms:Decrypt', 
+            actions = [
+                'kms:Decrypt',
                 'kms:GenerateDataKey'
                 ],
-            resources = ['*']
+            resources = [f'arn:aws:kms:{aws_region}:{aws_account}:key/*']
         )
         omics_role.add_to_policy(omics_kms_policy)
 
@@ -224,27 +224,33 @@ class OmicsWorkflowStack(Stack):
                 'omics:TagResource',
                 'omics:GetRun'
             ],
-            resources = ['*']
+            resources = [
+                f'arn:aws:omics:{aws_region}:{aws_account}:run/*',
+                f'arn:aws:omics:{aws_region}:{aws_account}:workflow/*',
+                f'arn:aws:omics:us-east-1::workflow/*',
+            ]
         )
         lambda_role.add_to_policy(lambda_omics_policy)
 
-        # KMS permission for SNS topic encryption
+        # KMS permission for SNS topic encryption (scoped to account)
         lambda_kms_policy = iam.PolicyStatement(
             actions = [
                 'kms:GenerateDataKey',
                 'kms:Decrypt'
             ],
-            resources = ['*']
+            resources = [f'arn:aws:kms:{aws_region}:{aws_account}:key/*']
         )
         lambda_role.add_to_policy(lambda_kms_policy)
 
-        # SES permission for sending HTML emails
+        # SES permission for sending HTML emails (scoped to verified identity)
+        ses_sender_email = config.get("SES_SENDER_EMAIL", "")
+        ses_identity = f'arn:aws:ses:{aws_region}:{aws_account}:identity/{ses_sender_email}' if ses_sender_email else f'arn:aws:ses:{aws_region}:{aws_account}:identity/*'
         lambda_ses_policy = iam.PolicyStatement(
             actions = [
                 'ses:SendEmail',
                 'ses:SendRawEmail'
             ],
-            resources = ['*']
+            resources = [ses_identity]
         )
         lambda_role.add_to_policy(lambda_ses_policy)
 

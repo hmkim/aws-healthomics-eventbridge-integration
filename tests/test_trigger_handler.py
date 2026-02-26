@@ -11,20 +11,41 @@ os.environ['WORKFLOW_STATE_TABLE'] = 'TestWorkflowState'
 os.environ['TASK_TOKENS_TABLE'] = 'TestTaskTokens'
 os.environ['AWS_DEFAULT_REGION'] = 'us-east-1'
 
-# Add trigger_handler to path
+# Add trigger_handler and shared to path
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'lambda_function', 'trigger_handler'))
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'lambda_function', 'shared'))
 
 # Patch boto3 client before importing trigger_handler
 with patch('boto3.client') as mock_boto_client:
     import trigger_handler
 
+ORG_ID = 'ORG-TEST'
 
-def _api_event(body):
+
+def _auth_claims(org_id=ORG_ID, groups='["operator"]'):
     return {
+        'requestContext': {
+            'authorizer': {
+                'claims': {
+                    'sub': 'test-user',
+                    'email': 'test@example.com',
+                    'organization_id': org_id,
+                    'cognito:groups': groups,
+                    'custom:display_name': 'Test User',
+                }
+            }
+        },
+    }
+
+
+def _api_event(body, org_id=ORG_ID, groups='["operator"]'):
+    event = {
         'body': json.dumps(body) if isinstance(body, dict) else body,
         'httpMethod': 'POST',
         'path': '/analysis/start',
     }
+    event.update(_auth_claims(org_id, groups))
+    return event
 
 
 def _valid_body():
@@ -80,7 +101,7 @@ def test_invalid_json():
     mock_sfn = MagicMock()
     trigger_handler.sfn = mock_sfn
 
-    event = {'body': 'not json'}
+    event = _api_event('not json')
     result = trigger_handler.handler(event, {})
 
     assert result['statusCode'] == 400

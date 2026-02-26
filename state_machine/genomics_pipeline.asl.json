@@ -22,7 +22,8 @@
           "ExecutionArn": { "S.$": "$$.Execution.Id" },
           "Status": { "S": "INITIALIZED" },
           "FastqR1": { "S.$": "$.fastq_paths.r1" },
-          "FastqR2": { "S.$": "$.fastq_paths.r2" }
+          "FastqR2": { "S.$": "$.fastq_paths.r2" },
+          "OrganizationID": { "S.$": "$.organization_id" }
         }
       },
       "ResultPath": "$.dynamodb_init",
@@ -123,12 +124,13 @@
           "SampleID": { "S.$": "$.sample_id" },
           "Timestamp": { "S.$": "$$.Execution.StartTime" }
         },
-        "UpdateExpression": "SET #s = :status, UpdatedAt = :updated",
+        "UpdateExpression": "SET #s = :status, GATKOutputUri = :outputUri, UpdatedAt = :updated",
         "ExpressionAttributeNames": {
           "#s": "Status"
         },
         "ExpressionAttributeValues": {
           ":status": { "S": "GATK_COMPLETED" },
+          ":outputUri": { "S.$": "$.gatk_completion.output_uri" },
           ":updated": { "S.$": "$$.State.EnteredTime" }
         }
       },
@@ -222,12 +224,13 @@
           "SampleID": { "S.$": "$.sample_id" },
           "Timestamp": { "S.$": "$$.Execution.StartTime" }
         },
-        "UpdateExpression": "SET #s = :status, UpdatedAt = :updated",
+        "UpdateExpression": "SET #s = :status, VEPOutputUri = :outputUri, UpdatedAt = :updated",
         "ExpressionAttributeNames": {
           "#s": "Status"
         },
         "ExpressionAttributeValues": {
           ":status": { "S": "VEP_COMPLETED" },
+          ":outputUri": { "S.$": "$.vep_completion.output_uri" },
           ":updated": { "S.$": "$$.State.EnteredTime" }
         }
       },
@@ -361,7 +364,13 @@
         }
       },
       "ResultPath": "$.update_result",
-      "Next": "PipelineFailed"
+      "Next": "TagValidationFailure"
+    },
+    "TagValidationFailure": {
+      "Type": "Pass",
+      "Result": "VALIDATION_FAILED",
+      "ResultPath": "$.failure_type",
+      "Next": "SendFailureNotification"
     },
     "HandleWorkflowFailure": {
       "Type": "Task",
@@ -383,7 +392,13 @@
         }
       },
       "ResultPath": "$.update_result",
-      "Next": "PipelineFailed"
+      "Next": "TagWorkflowFailure"
+    },
+    "TagWorkflowFailure": {
+      "Type": "Pass",
+      "Result": "WORKFLOW_FAILED",
+      "ResultPath": "$.failure_type",
+      "Next": "SendFailureNotification"
     },
     "HandleWorkflowTimeout": {
       "Type": "Task",
@@ -405,7 +420,13 @@
         }
       },
       "ResultPath": "$.update_result",
-      "Next": "PipelineFailed"
+      "Next": "TagWorkflowTimeout"
+    },
+    "TagWorkflowTimeout": {
+      "Type": "Pass",
+      "Result": "WORKFLOW_TIMEOUT",
+      "ResultPath": "$.failure_type",
+      "Next": "SendFailureNotification"
     },
     "HandleApprovalTimeout": {
       "Type": "Task",
@@ -427,7 +448,37 @@
         }
       },
       "ResultPath": "$.update_result",
-      "Next": "PipelineFailed"
+      "Next": "TagApprovalTimeout"
+    },
+    "TagApprovalTimeout": {
+      "Type": "Pass",
+      "Result": "APPROVAL_TIMEOUT",
+      "ResultPath": "$.failure_type",
+      "Next": "SendFailureNotification"
+    },
+    "SendFailureNotification": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::lambda:invoke",
+      "Parameters": {
+        "FunctionName": "${FailureNotificationFunctionArn}",
+        "Payload": {
+          "sample_id.$": "$.sample_id",
+          "project_id.$": "$.project_id",
+          "submitter_email.$": "$.submitter_email",
+          "organization_id.$": "$.organization_id",
+          "failure_type.$": "$.failure_type",
+          "error.$": "$.error"
+        }
+      },
+      "ResultPath": "$.notification_result",
+      "Next": "PipelineFailed",
+      "Catch": [
+        {
+          "ErrorEquals": ["States.ALL"],
+          "Next": "PipelineFailed",
+          "Comment": "Notification failure should not block the pipeline from reporting its own failure"
+        }
+      ]
     },
     "PipelineFailed": {
       "Type": "Fail",

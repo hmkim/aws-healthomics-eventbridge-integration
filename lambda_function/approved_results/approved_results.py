@@ -29,14 +29,14 @@ class DecimalEncoder(json.JSONEncoder):
 
 @require_auth('admin')
 def handler(event, context):
-    """List samples awaiting admin approval, filtered by caller's organization."""
+    """List approved analysis results, filtered by caller's organization."""
     auth = event['auth']
     org_id = auth['organization_id']
-    logger.info(f"Pending approvals query for org={org_id}")
+    logger.info(f"Approved results query for org={org_id}")
 
     response = state_table.query(
         IndexName='StatusIndex',
-        KeyConditionExpression=Key('Status').eq('AWAITING_APPROVAL'),
+        KeyConditionExpression=Key('Status').eq('COMPLETED_APPROVED'),
     )
     items = response.get('Items', [])
 
@@ -51,7 +51,7 @@ def handler(event, context):
         'statusCode': 200,
         'headers': cors_headers(),
         'body': json.dumps({
-            'pending_approvals': items,
+            'approved_results': items,
             'count': len(items),
         }, cls=DecimalEncoder),
     }

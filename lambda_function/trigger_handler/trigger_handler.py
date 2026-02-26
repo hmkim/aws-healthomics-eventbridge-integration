@@ -2,8 +2,13 @@ import boto3
 import os
 import json
 import logging
+import sys
 import uuid
 from validators import validate_lims_payload, ValidationError
+
+# Add shared layer to path
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'shared'))
+from auth_middleware import require_auth, cors_headers
 
 STATE_MACHINE_ARN = os.environ['STATE_MACHINE_ARN']
 LOG_LEVEL = os.environ.get('LOG_LEVEL', 'INFO')
@@ -14,9 +19,12 @@ logging.basicConfig(level=LOG_LEVEL)
 logger = logging.getLogger(__name__)
 
 
+@require_auth('operator')
 def handler(event, context):
     """Receives LIMS JSON via API Gateway, validates, and starts Step Functions execution."""
-    logger.info(f"Received event: {json.dumps(event)}")
+    auth = event['auth']
+    org_id = auth['organization_id']
+    logger.info(f"Trigger handler for org={org_id}")
 
     try:
         # Parse body from API Gateway
@@ -31,7 +39,7 @@ def handler(event, context):
         sample_id = data['sample_id']
         project_id = data['project_id']
 
-        # Prepare Step Functions input
+        # Prepare Step Functions input — include organization_id for data isolation
         sfn_input = {
             'source': body['source'],
             'event_type': body['event_type'],
@@ -42,6 +50,7 @@ def handler(event, context):
             'fastq_paths': data['fastq_paths'],
             'reference_genome': data['reference_genome'],
             'analysis_type': data.get('analysis_type', 'WGS'),
+            'organization_id': org_id,
         }
 
         unique_suffix = uuid.uuid4().hex[:8]
@@ -57,10 +66,7 @@ def handler(event, context):
 
         return {
             'statusCode': 202,
-            'headers': {
-                'Content-Type': 'application/json',
-                'Access-Control-Allow-Origin': '*',
-            },
+            'headers': cors_headers(),
             'body': json.dumps({
                 'message': 'Analysis pipeline started',
                 'execution_arn': response['executionArn'],
@@ -73,10 +79,7 @@ def handler(event, context):
         logger.warning(f"Validation error: {e}")
         return {
             'statusCode': 400,
-            'headers': {
-                'Content-Type': 'application/json',
-                'Access-Control-Allow-Origin': '*',
-            },
+            'headers': cors_headers(),
             'body': json.dumps({
                 'error': 'Validation failed',
                 'details': e.errors,
@@ -85,10 +88,7 @@ def handler(event, context):
     except json.JSONDecodeError:
         return {
             'statusCode': 400,
-            'headers': {
-                'Content-Type': 'application/json',
-                'Access-Control-Allow-Origin': '*',
-            },
+            'headers': cors_headers(),
             'body': json.dumps({
                 'error': 'Invalid JSON in request body',
             }),
@@ -97,10 +97,7 @@ def handler(event, context):
         logger.error(f"Unexpected error: {e}", exc_info=True)
         return {
             'statusCode': 500,
-            'headers': {
-                'Content-Type': 'application/json',
-                'Access-Control-Allow-Origin': '*',
-            },
+            'headers': cors_headers(),
             'body': json.dumps({
                 'error': 'Internal server error',
             }),

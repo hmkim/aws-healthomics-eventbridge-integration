@@ -18,12 +18,15 @@ import json
 
 class LimsOrchestrationStack(Stack):
 
-    def __init__(self, scope: Construct, construct_id: str, config, omics_resources, **kwargs) -> None:
+    def __init__(self, scope: Construct, construct_id: str, config, omics_resources, cognito_resources=None, frontend_url=None, **kwargs) -> None:
         super().__init__(scope, construct_id, **kwargs)
 
         aws_account = self.account
         aws_region = self.region
         APP_NAME = "lims-genomics"
+
+        # CORS allowed origin (CloudFront URL or '*' for local dev)
+        allowed_origin = frontend_url or '*'
 
         # Unpack cross-stack resources
         bucket_input = omics_resources["bucket_input"]
@@ -66,6 +69,14 @@ class LimsOrchestrationStack(Stack):
             removal_policy=RemovalPolicy.DESTROY,
         )
 
+        # GSI for querying samples by organization
+        lims_samples_table.add_global_secondary_index(
+            index_name="OrganizationIndex",
+            partition_key=dynamodb.Attribute(name="OrganizationID", type=dynamodb.AttributeType.STRING),
+            sort_key=dynamodb.Attribute(name="SampleID", type=dynamodb.AttributeType.STRING),
+            projection_type=dynamodb.ProjectionType.ALL,
+        )
+
         # Task tokens table for HealthOmics -> Step Functions callback
         task_tokens_table = dynamodb.Table(
             self, f"{APP_NAME}-task-tokens",
@@ -90,12 +101,16 @@ class LimsOrchestrationStack(Stack):
         # DynamoDB access
         workflow_state_table.grant_read_write_data(orchestration_lambda_role)
         task_tokens_table.grant_read_write_data(orchestration_lambda_role)
-        lims_samples_table.grant_read_data(orchestration_lambda_role)
+        lims_samples_table.grant_read_write_data(orchestration_lambda_role)
 
-        # HealthOmics access
+        # HealthOmics access (scoped to account)
         orchestration_lambda_role.add_to_policy(iam.PolicyStatement(
             actions=["omics:StartRun", "omics:TagResource", "omics:GetRun"],
-            resources=["*"],
+            resources=[
+                f"arn:aws:omics:{aws_region}:{aws_account}:run/*",
+                f"arn:aws:omics:{aws_region}:{aws_account}:workflow/*",
+                f"arn:aws:omics:us-east-1::workflow/*",
+            ],
         ))
 
         # PassRole for Omics service role
@@ -115,18 +130,45 @@ class LimsOrchestrationStack(Stack):
             ],
         ))
 
-        # Step Functions task token callbacks
-        orchestration_lambda_role.add_to_policy(iam.PolicyStatement(
+        # Step Functions task token callbacks (scoped to state machine ARN after creation)
+        sfn_callback_policy = iam.PolicyStatement(
             actions=[
                 "states:SendTaskSuccess",
                 "states:SendTaskFailure",
                 "states:SendTaskHeartbeat",
             ],
-            resources=["*"],
-        ))
+            resources=[f"arn:aws:states:{aws_region}:{aws_account}:stateMachine:{APP_NAME}-*"],
+        )
+        orchestration_lambda_role.add_to_policy(sfn_callback_policy)
 
         # SNS publish
         sns_topic.grant_publish(orchestration_lambda_role)
+
+        # SES send email (scoped to verified identity)
+        ses_sender = config.get("SES_SENDER_EMAIL", "")
+        ses_identity_arn = f"arn:aws:ses:{aws_region}:{aws_account}:identity/{ses_sender}" if ses_sender else f"arn:aws:ses:{aws_region}:{aws_account}:identity/*"
+        orchestration_lambda_role.add_to_policy(iam.PolicyStatement(
+            actions=["ses:SendEmail"],
+            resources=[ses_identity_arn],
+        ))
+        # SES account-level queries (no resource-level scoping available)
+        orchestration_lambda_role.add_to_policy(iam.PolicyStatement(
+            actions=[
+                "ses:GetSendQuota",
+                "ses:GetIdentityVerificationAttributes",
+            ],
+            resources=["*"],
+        ))
+
+        ################################################################################################
+        #################################### Shared Auth Lambda Layer ##################################
+
+        auth_layer = lambda_.LayerVersion(
+            self, f"{APP_NAME}-auth-layer",
+            code=lambda_.Code.from_asset("lambda_function/auth_layer"),
+            compatible_runtimes=[lambda_.Runtime.PYTHON_3_12],
+            description="Shared auth middleware (require_auth decorator)",
+        )
 
         ################################################################################################
         #################################### Lambda Functions ##########################################
@@ -135,6 +177,7 @@ class LimsOrchestrationStack(Stack):
             "WORKFLOW_STATE_TABLE": workflow_state_table.table_name,
             "TASK_TOKENS_TABLE": task_tokens_table.table_name,
             "LOG_LEVEL": "INFO",
+            "ALLOWED_ORIGIN": allowed_origin,
         }
 
         # Start GATK Lambda
@@ -280,6 +323,67 @@ class LimsOrchestrationStack(Stack):
             environment=common_env,
         )
 
+        # Failure Notification Lambda (Step Functions -> SNS email on pipeline failure)
+        failure_notification_env = {
+            "SNS_TOPIC_ARN": sns_topic.topic_arn,
+            "LOG_LEVEL": "INFO",
+        }
+        if cognito_resources:
+            failure_notification_env["USER_POOL_ID"] = cognito_resources["user_pool"].user_pool_id
+
+        failure_notification_lambda = lambda_.Function(
+            self, f"{APP_NAME}-failure-notification",
+            runtime=lambda_.Runtime.PYTHON_3_12,
+            handler="failure_notification.handler",
+            code=lambda_.Code.from_asset("lambda_function/failure_notification"),
+            role=orchestration_lambda_role,
+            timeout=Duration.seconds(30),
+            environment=failure_notification_env,
+        )
+
+        # Approved Results Lambda (list approved results)
+        approved_results_lambda = lambda_.Function(
+            self, f"{APP_NAME}-approved-results",
+            runtime=lambda_.Runtime.PYTHON_3_12,
+            handler="approved_results.handler",
+            code=lambda_.Code.from_asset("lambda_function/approved_results"),
+            role=orchestration_lambda_role,
+            timeout=Duration.seconds(30),
+            environment=common_env,
+        )
+
+        # Send Results Lambda (generate presigned URLs + send email via SES)
+        send_results_env = {
+            **common_env,
+            "SES_SENDER_EMAIL": config.get("SES_SENDER_EMAIL", ""),
+        }
+        if cognito_resources:
+            send_results_env["USER_POOL_ID"] = cognito_resources["user_pool"].user_pool_id
+
+        send_results_lambda = lambda_.Function(
+            self, f"{APP_NAME}-send-results",
+            runtime=lambda_.Runtime.PYTHON_3_12,
+            handler="send_results.handler",
+            code=lambda_.Code.from_asset("lambda_function/send_results"),
+            role=orchestration_lambda_role,
+            timeout=Duration.seconds(60),
+            environment=send_results_env,
+        )
+
+        # Grant Cognito ListUsersInGroup for failure notification org admin lookup
+        if cognito_resources:
+            orchestration_lambda_role.add_to_policy(iam.PolicyStatement(
+                actions=["cognito-idp:ListUsersInGroup"],
+                resources=[cognito_resources["user_pool"].user_pool_arn],
+            ))
+
+        # Attach auth layer to all API-facing Lambda functions
+        for fn in [trigger_handler_lambda, status_query_lambda,
+                    pending_approvals_lambda, approval_handler_lambda,
+                    lims_samples_lambda, approved_results_lambda,
+                    send_results_lambda]:
+            fn.add_layers(auth_layer)
+
         ################################################################################################
         #################################### Step Functions State Machine ###############################
 
@@ -299,6 +403,8 @@ class LimsOrchestrationStack(Stack):
             "${PrepareApprovalFunctionArn}", prepare_approval_lambda.function_arn
         ).replace(
             "${StoreApprovalTokenFunctionArn}", store_approval_token_lambda.function_arn
+        ).replace(
+            "${FailureNotificationFunctionArn}", failure_notification_lambda.function_arn
         )
 
         # Step Functions IAM role
@@ -309,7 +415,8 @@ class LimsOrchestrationStack(Stack):
 
         # Lambda invoke permissions
         for fn in [start_gatk_lambda, start_vep_lambda, store_token_lambda,
-                    prepare_approval_lambda, store_approval_token_lambda]:
+                    prepare_approval_lambda, store_approval_token_lambda,
+                    failure_notification_lambda]:
             fn.grant_invoke(sfn_role)
 
         # DynamoDB permissions for direct SDK integrations in ASL
@@ -402,7 +509,7 @@ class LimsOrchestrationStack(Stack):
             rest_api_name=f"{APP_NAME}-api",
             description="LIMS Genomics Orchestration API",
             default_cors_preflight_options=apigw.CorsOptions(
-                allow_origins=apigw.Cors.ALL_ORIGINS,
+                allow_origins=[allowed_origin] if allowed_origin != '*' else apigw.Cors.ALL_ORIGINS,
                 allow_methods=apigw.Cors.ALL_METHODS,
                 allow_headers=["Content-Type", "X-Api-Key", "Authorization"],
             ),
@@ -413,60 +520,112 @@ class LimsOrchestrationStack(Stack):
             ),
         )
 
-        # API Key and Usage Plan
-        api_key = api.add_api_key(f"{APP_NAME}-api-key")
-        usage_plan = api.add_usage_plan(
-            f"{APP_NAME}-usage-plan",
-            name=f"{APP_NAME}-usage-plan",
-            throttle=apigw.ThrottleSettings(rate_limit=50, burst_limit=100),
+        # Gateway Responses — add CORS headers to error responses generated
+        # by API Gateway itself (e.g., Cognito authorizer 401, throttling 429).
+        # Without these, the browser blocks error responses as CORS violations.
+        api.add_gateway_response(
+            "default-4xx",
+            type=apigw.ResponseType.DEFAULT_4_XX,
+            response_headers={
+                "Access-Control-Allow-Origin": f"'{allowed_origin}'",
+                "Access-Control-Allow-Headers": "'Content-Type,Authorization'",
+            },
         )
-        usage_plan.add_api_key(api_key)
-        usage_plan.add_api_stage(stage=api.deployment_stage)
+        api.add_gateway_response(
+            "default-5xx",
+            type=apigw.ResponseType.DEFAULT_5_XX,
+            response_headers={
+                "Access-Control-Allow-Origin": f"'{allowed_origin}'",
+                "Access-Control-Allow-Headers": "'Content-Type,Authorization'",
+            },
+        )
+
+        # Cognito Authorizer (replaces API Key auth)
+        cognito_authorizer = None
+        if cognito_resources:
+            cognito_authorizer = apigw.CognitoUserPoolsAuthorizer(
+                self, f"{APP_NAME}-cognito-auth",
+                cognito_user_pools=[cognito_resources["user_pool"]],
+            )
+
+        method_options = {}
+        if cognito_authorizer:
+            method_options = {
+                "authorizer": cognito_authorizer,
+                "authorization_type": apigw.AuthorizationType.COGNITO,
+            }
 
         # /v1/analysis
         analysis_resource = api.root.add_resource("analysis")
 
-        # POST /v1/analysis/start
+        # POST /v1/analysis/start — requires 'operator' role (enforced in Lambda)
         start_resource = analysis_resource.add_resource("start")
         start_resource.add_method(
             "POST",
             apigw.LambdaIntegration(trigger_handler_lambda),
-            api_key_required=True,
+            **method_options,
         )
 
-        # GET /v1/analysis/status/{sample_id}
+        # GET /v1/analysis/status/{sample_id} — requires 'viewer' role
         status_resource = analysis_resource.add_resource("status")
         sample_id_resource = status_resource.add_resource("{sample_id}")
         sample_id_resource.add_method(
             "GET",
             apigw.LambdaIntegration(status_query_lambda),
+            **method_options,
         )
 
         # /v1/admin
         admin_resource = api.root.add_resource("admin")
 
-        # POST /v1/admin/approve
+        # POST /v1/admin/approve — requires 'admin' role
         approve_resource = admin_resource.add_resource("approve")
         approve_resource.add_method(
             "POST",
             apigw.LambdaIntegration(approval_handler_lambda),
+            **method_options,
         )
 
-        # GET /v1/admin/pending
+        # GET /v1/admin/pending — requires 'admin' role
         pending_resource = admin_resource.add_resource("pending")
         pending_resource.add_method(
             "GET",
             apigw.LambdaIntegration(pending_approvals_lambda),
+            **method_options,
+        )
+
+        # GET /v1/admin/results — requires 'admin' role
+        results_resource = admin_resource.add_resource("results")
+        results_resource.add_method(
+            "GET",
+            apigw.LambdaIntegration(approved_results_lambda),
+            **method_options,
+        )
+
+        # POST /v1/admin/results/send — requires 'admin' role
+        results_send_resource = results_resource.add_resource("send")
+        results_send_resource.add_method(
+            "POST",
+            apigw.LambdaIntegration(send_results_lambda),
+            **method_options,
         )
 
         # /v1/lims
         lims_resource = api.root.add_resource("lims")
 
-        # GET /v1/lims/samples
+        # GET /v1/lims/samples — requires 'viewer' role
         lims_samples_resource = lims_resource.add_resource("samples")
         lims_samples_resource.add_method(
             "GET",
             apigw.LambdaIntegration(lims_samples_lambda),
+            **method_options,
+        )
+
+        # POST /v1/lims/samples — register samples (operator+ role, checked in Lambda)
+        lims_samples_resource.add_method(
+            "POST",
+            apigw.LambdaIntegration(lims_samples_lambda),
+            **method_options,
         )
 
         ################################################################################################
@@ -474,10 +633,8 @@ class LimsOrchestrationStack(Stack):
 
         # Expose properties for cross-stack references
         self.api_id = api.rest_api_id
-        self.api_key_id = api_key.key_id
 
         CfnOutput(self, "ApiUrl", value=api.url, description="API Gateway URL")
-        CfnOutput(self, "ApiKeyId", value=api_key.key_id, description="API Key ID")
         CfnOutput(self, "StateMachineArn",
                   value=f"arn:aws:states:{aws_region}:{aws_account}:stateMachine:{APP_NAME}-genomics-pipeline",
                   description="Step Functions State Machine ARN")
