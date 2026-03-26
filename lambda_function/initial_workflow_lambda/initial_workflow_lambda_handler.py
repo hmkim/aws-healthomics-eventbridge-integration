@@ -1,4 +1,5 @@
 import boto3
+from botocore.config import Config
 import os
 import botocore.exceptions
 import json
@@ -13,7 +14,10 @@ ECR_REGISTRY = os.environ['ECR_REGISTRY']
 LOG_LEVEL = os.environ['LOG_LEVEL']
 AWS_REGION = os.environ.get('AWS_REGION', 'us-east-1')
 
-omics = boto3.client('omics')
+# StartRun TPS quota is 1.0 — use adaptive retry with generous backoff
+omics = boto3.client('omics', config=Config(
+    retries={'mode': 'adaptive', 'max_attempts': 10},
+))
 s3 = boto3.client('s3')
 
 # enable logging 

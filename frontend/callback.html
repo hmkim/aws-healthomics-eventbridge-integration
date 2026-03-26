@@ -1,0 +1,56 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="description" content="LIMS Genomics Dashboard - Authentication Callback">
+    <title>Logging in... | LIMS Genomics Dashboard</title>
+    <link rel="stylesheet" href="styles.css">
+    <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>&#x1F9EC;</text></svg>">
+</head>
+<body>
+    <div class="loading-state" style="min-height: 100vh;" id="loading-state">
+        <div class="spinner"></div>
+        <p class="loading-text">Completing login...</p>
+    </div>
+
+    <div class="main" id="error-state" style="display: none;">
+        <div class="card" style="max-width: 480px; margin: 64px auto;">
+            <div class="card-header">
+                <h2 class="card-title">Login Failed</h2>
+            </div>
+            <div class="card-body">
+                <div class="error-message" id="error-message"></div>
+                <div style="margin-top: 16px;">
+                    <a href="index.html" class="btn btn-primary">Try Again</a>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Scripts -->
+    <script src="config.js"></script>
+    <script src="shared/ui.js"></script>
+    <script src="shared/auth.js"></script>
+    <script>
+        // OAuth2 callback handler
+        // Extracts code from URL, exchanges for tokens, redirects to destination
+        document.addEventListener('DOMContentLoaded', async () => {
+            try {
+                // Exchange authorization code for tokens
+                const redirectTo = await Auth.handleCallback();
+
+                // Redirect to the intended page (from state param)
+                window.location.href = redirectTo;
+            } catch (error) {
+                console.error('Callback error:', error);
+
+                // Show error state
+                document.getElementById('loading-state').style.display = 'none';
+                document.getElementById('error-state').style.display = 'block';
+                document.getElementById('error-message').textContent = error.message || 'Authentication failed';
+            }
+        });
+    </script>
+</body>
+</html>

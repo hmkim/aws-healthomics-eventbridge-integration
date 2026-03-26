@@ -1,310 +1,297 @@
+# AWS HealthOmics + LIMS Integration Pipeline
 
-# Solution Overview
+An automated genomics analysis pipeline that integrates a Laboratory Information Management System (LIMS) with [AWS HealthOmics](https://aws.amazon.com/healthomics/) using event-driven architecture. The system runs GATK (Germline Short Variant Discovery) and VEP (Variant Effect Predictor) workflows, with admin approval, multi-tenant data isolation, and email delivery of results.
 
+![Architecture](./assets/omics-eventbridge-architecture.png)
 
-AWS HealthOmics workflows allows customers to process their genomics or other multi-omic data either by bringing their own workflows or running existing Ready2Run workflows. <insert blog link here look at other README> Often, customers want to have automation in place to launch workflows automatically, trigger a new process, such as another AWS HealthOmics workflow, after successful completion of the first workflow and notify users in case of workflow failure. AWS HealthOmics has an integration with Amazon EventBridge which enables customers to build a production scale, fully automated and event-driven solution on AWS. This solution demonstrates how we can automatically launch an AWS HealthOmics workflow upon file upload, use EventBridge to launch a second workflow on successful completion of the first workflow and notify a user (or group) on failure via Amazon SNS. This repository includes sample code with infrastructure as code (IaC) and sample data that can be used by customers to deploy this solution in their own accounts. The solution leverages various AWS services such as HealthOmics, EventBridge, S3, IAM, Lambda, SNS and ECR to create end-to-end "omics" data processing pipelines. The solution automatically starts a workflow run on data upload, notifies users of workflow failures and continues downstream processing with another workflow on successful completion of the first workflow. This automation enables users to focus on scientific research instead of the infrastructure and reduces operational overhead.
+## Features
 
+- **Two pipeline paths**: EventBridge-triggered (S3 upload) and LIMS Orchestration (API + Step Functions with admin approval)
+- **Role-based access control (RBAC)**: Cognito User Pool with `admin`, `operator`, and `viewer` groups
+- **Multi-tenant data isolation**: Organization-level data separation via JWT claims
+- **Admin approval workflow**: Step Functions `waitForTaskToken` pattern with 7-day timeout
+- **Email result delivery**: SES-based HTML emails with presigned S3 download URLs
+- **Mock LIMS emulator**: Streamlit app for testing without a real LIMS
 
-# Architecture 
+## Architecture
 
-The diagram below shows the high-level architecture for the solution including the end-to-end flow of data.
+The system is deployed as 4 CDK stacks:
 
-![image](./assets/omics-eventbridge-architecture.png?raw=true "Architecture")
+| Stack | Description |
+|-------|-------------|
+| `omics-eventbridge-solution` | HealthOmics workflows, S3 buckets, EventBridge rules, VEP container build |
+| `lims-cognito-auth` | Cognito User Pool, groups, domain, pre-token-generation Lambda |
+| `lims-orchestration` | Step Functions, API Gateway, DynamoDB tables, 14 Lambda functions |
+| `lims-frontend` | S3 + CloudFront static dashboard with OAuth2 login |
 
+Key AWS services: HealthOmics, Step Functions, API Gateway, Lambda, DynamoDB, Cognito, EventBridge, S3, CloudFront, SES, SNS, CodeBuild, ECR.
 
-# Well-Architected
+See [ARCHITECTURE.md](./ARCHITECTURE.md) for detailed data flows, DynamoDB schemas, Lambda reference, and troubleshooting.
 
-The solution was built using the 5 [AWS Well-Architected pillars](https://aws.amazon.com/architecture/well-architected) - Operational Excellence, Security, Reliability, Cost Optimization, and Performance Efficiency.
+## Prerequisites
 
-**Operational Excellence**
+- **AWS CLI** configured with credentials for `us-east-1`
+- **Node.js 18+** and **npm** (for CDK CLI)
+- **Python 3.12+** (Lambda runtime)
+- **Docker** (for VEP container image build)
+- **AWS CDK CLI**: `npm install -g aws-cdk`
+- An AWS account with HealthOmics access (Ready2Run workflows are only available in `us-east-1`)
 
-* Infrastructure-as-Code (IaC) with [AWS Cloud Development Kit (CDK)](https://aws.amazon.com/cdk/) for ease of deployment, change management, and compliance.
-* AWS HealthOmics, a managed service, to simplify workflow infrastructure and orchestration.
+Bootstrap CDK in your account (first time only):
 
-**Security**
+```bash
+cdk bootstrap aws://<YOUR_ACCOUNT_ID>/us-east-1
+```
 
-* Encrypt S3 buckets with sequence data (inputs and outputs).
-* Use least-privilege access with Identity and Access Management (IAM).
-* AWS HealthOmics workflow operates in a private environment with no incoming or outgoing access to the public internet. 
-* Ensure that S3 data is uploaded with encryption in transite best practices.
+## Quick Start
 
-**Reliability**
+```bash
+# Clone the repository
+git clone https://github.com/hmkim/aws-healthomics-eventbridge-integration.git
+cd aws-healthomics-eventbridge-integration
 
-* Ability to scale using Lambda functions, HealthOmics workflows, and S3.
-* Ability to capture failures and push-based notifications enable operations teams to act on failures as soon as they occur and minimize delays in data analysis. 
+# Create and activate a virtual environment
+python3 -m venv .venv
+source .venv/bin/activate
+pip install -r requirements.txt
 
-**Performance Efficiency**
+# Configure deployment settings
+# Edit constants.py — set SES_SENDER_EMAIL, SES_RECIPIENT_EMAIL, ADMIN_EMAIL
+vi constants.py
 
-* Event-driven automation using EventBridge to run the next action as soon as previous action is completed.
-* Optimized HealthOmics Ready2Run workflows
-* Ability to get performant instances based on workflow requirements with HealthOmics Private workflows.
+# Synthesize and deploy all stacks
+cdk synth
+cdk deploy --all --require-approval never
+```
 
-**Cost Optimization**
+### Post-Deployment Steps
 
-* Use a managed service, AWS HealthOmics, which reduces resources spent on managing and securing workflow management applications and associated infrastructure, thus reducing total cost of ownership (TCO). 
-* Use a Ready2Run workflow where applicable to reduce developer time building, testing, optimizing, and maintaining bioinformatics workflows. 
-* To further optimize costs for storage of sequence data, customers can store the FASTQ files generated in AWS HealthOmics sequence stores. Data stored in these stores can be used as input to HealthOmics workflows, similar to S3, while offering better cost savings.
+1. **Set `FRONTEND_URL`**: After the first deploy, copy the CloudFront URL from the `lims-frontend` stack outputs and set it in `constants.py`:
 
+   ```python
+   "FRONTEND_URL": "https://<your-cloudfront-domain>",
+   ```
 
-# Solution Setup
+   Then redeploy to apply CORS settings:
 
-## Prerequisites 
+   ```bash
+   cdk deploy lims-orchestration
+   ```
 
-The following prerequisites are needed to deploy and test the solution:
+2. **Verify SES email addresses** (required in SES sandbox mode):
 
-* Access to an AWS account and relevant permissions to create/use the following services:
-    * AWS Lambda, AWS HealthOmics, Amazon S3, Amazon Eventbridge, AWS IAM, Amazon SNS, Amazon ECR, Amazon CloudWatch Logs, AWS KMS, Cloud9 (optional)
-* Node.js and npm installed
-* Python 3 installed
-* AWS CLI installed and configured
-* AWS CDK CLI installed
+   ```bash
+   aws ses verify-email-identity --email-address <your-sender-email>
+   aws ses verify-email-identity --email-address <your-recipient-email>
+   ```
 
+   Check your inbox and confirm both verification emails.
 
-### Option 1 : Use Cloud9 
+## Creating Test Users and Sample Data
 
-Create a Cloud9 Instance to run this solution (https://catalog.us-east-1.prod.workshops.aws/workshops/d93fec4c-fb0f-4813-ac90-758cb5527f2f/en-US/start/using-own-account/cloud9)
+The `seed_test_data.py` script creates Cognito users and DynamoDB sample records for testing.
 
-### Option 2 : Using your desktop
+```bash
+# Get the User Pool ID from CDK outputs or AWS Console
+python scripts/seed_test_data.py --user-pool-id <your-user-pool-id> --region us-east-1
 
-You can set up the pre-requisites on your local workstation/laptop as well. Look at the requirements.txt file in https://gitlab.aws.dev/omics/omics-event-bridge-int/-/blob/main/requirements.txt
-(will change when uploaded to GitHub)
+# Preview without creating anything
+python scripts/seed_test_data.py --user-pool-id <your-user-pool-id> --dry-run
+```
 
-## Implementation
+This creates:
 
-This solution uses IaC with CDK and Python to deploy and manage resources in the cloud. The following steps show how to initialize and deploy the solution:
+| Organization | Users | Samples |
+|-------------|-------|---------|
+| **ORG-ACME** (ACME Genomics Lab) | admin@acme.example.com (`admin`), operator@acme.example.com (`operator`), viewer@acme.example.com (`viewer`) | 5 samples (rare disease trio WGS, clinical WES) |
+| **ORG-BIOCORP** (BioCorp Research) | admin@biocorp.example.com (`admin`), researcher@biocorp.example.com (`operator`) | 5 samples (immuno-oncology WES, tumor panel) |
+| **ORG-UNIVERSITY** (State University Medical Center) | pi@university.example.com (`admin`, `operator`) | 5 samples (pharmacogenomics WES, population WGS) |
 
-### Initial Setup
+**Password reset**: Users are created with random temporary passwords. To set a usable password, go to the Cognito Hosted UI login page and use the **Forgot password** flow. The Hosted UI URL is:
 
-Open Cloud9 environment or local environment and run the commands below to initialize CDK pipeline for deployment.
+```
+https://lims-genomics-<account-id>.auth.us-east-1.amazoncognito.com/forgotPassword?client_id=<your-client-id>&response_type=code&redirect_uri=https://<your-cloudfront-domain>/callback.html
+```
 
+## Running Tests
 
+```bash
+# Activate the virtual environment
+source .venv/bin/activate
 
-[IMPORTANT!]
-> **Check for availability of all services such as HealthOmics in the region before you take the steps below. Use the following resource to confirm: https://aws.amazon.com/about-aws/global-infrastructure/regional-product-services/**
+# Run all tests (179 tests)
+pytest tests/
 
-    python3 -m pip install aws-cdk-lib
-    npm install -g aws-cdk
-    npm install -g aws-cdk --force
-    cdk bootstrap aws://<ACCOUNTID>/<AWS-REGION>   # do this if your account hasn't been bootstraped
-    cdk --version
+# Run specific test files
+pytest tests/test_validators.py
+pytest tests/test_send_results.py -v
+pytest tests/test_trigger_handler.py -v
+```
 
-* Make sure to replace "ACCOUNTID" placeholder with actual account number
-* Replace “AWS-REGION” with a valid AWS region where you plan to deploy the solution. e.g. us-east-1 
-
-### Create Infrastructure
-
-Run the commands below to clone and deploy the HealthOmics-EventBridge integration solution using CDK. Running "cdk deploy" creates AWS CloudFormation templates to deploy the infrastructure.
-
-
-    git clone <github>
-    cd <proj-dir>
-    python3 -m venv .venv
-    source .venv/bin/activate
-    pip install -r requirements.txt
-    cdk synth
-    cdk deploy --all
-
-
-The deployment creates the following resources:
-
-* Explore the console to validate the following resources are created:
-  * Amazon S3 buckets - an *INPUT* bucket to store inputs and an *OUTPUT* bucket where the HealthOmics workflows upload outputs.
-  * AWS Lambda functions - an *initial* Lambda function to launch the first HealthOmics workflow and a *post-initial* Lambda function to launch the second HealthOmics workflow.
-  * AWS HealthOmics private workflow - *vep* - This is a private workflow whose Docker image gets built and stored in Amazon ECR followed by creating the workflow with HealthOmics.
-  * Amazon SNS topic - *-workflow_failure_notification* topic to receieve failure notifications from HealthOmics workflows
-  * Amazon EventBridge rules - rule with source *HealthOmics workflow run* and target *post-initial lambda function*
-  * IAM roles and policies - multiple IAM roles for lambda functions and HealthOmics workflow runs to enable least-privileged access to appropriate resources.
-
-[NOTE!]
-You can verify that these resources were created by navigating the AWS console after successful CDK deployment.
-
-## Configuration
-
-### Notification Settings
-
-The solution supports optional email notifications for workflow completions. Configure these settings in `constants.py` before deployment:
+Tests mock AWS services using `unittest.mock`. Lambda handlers create boto3 clients at module level, so tests set environment variables before importing:
 
 ```python
-DEV_CONFIG = {
-    # ... other settings ...
-
-    # Notification Settings
-    "SEND_COMPLETION_NOTIFICATION": False,  # Set to True to enable completion emails
-    "SES_SENDER_EMAIL": "",                 # e.g., "sender@example.com"
-    "SES_RECIPIENT_EMAIL": "",              # e.g., "recipient@example.com"
-}
+@mock.patch.dict(os.environ, {"TABLE_NAME": "test", "ALLOWED_ORIGIN": "https://example.com"})
+def test_handler(self):
+    from lambda_function.my_module import handler
+    # ...
 ```
 
-| Setting | Description | Default |
-|---------|-------------|---------|
-| `SEND_COMPLETION_NOTIFICATION` | Enable/disable email notifications for successful workflow completions | `False` |
-| `SES_SENDER_EMAIL` | Sender email address (must be verified in SES) | `""` (empty) |
-| `SES_RECIPIENT_EMAIL` | Recipient email address (must be verified in SES) | `""` (empty) |
+## Mock LIMS Emulator
 
-#### Setting Up Completion Notifications
+A Streamlit application that simulates a LIMS system for end-to-end testing.
 
-1. **Verify Email Addresses in SES**
-
-   Before enabling completion notifications, verify both sender and recipient email addresses in Amazon SES:
-   ```bash
-   aws ses verify-email-identity --email-address sender@example.com
-   aws ses verify-email-identity --email-address recipient@example.com
-   ```
-   Check your inbox and confirm the verification emails.
-
-2. **Update Configuration**
-
-   Edit `constants.py` to enable notifications:
-   ```python
-   "SEND_COMPLETION_NOTIFICATION": True,
-   "SES_SENDER_EMAIL": "sender@example.com",
-   "SES_RECIPIENT_EMAIL": "recipient@example.com",
-   ```
-
-3. **Deploy the Stack**
-   ```bash
-   cdk deploy --all
-   ```
-
-#### Notification Behavior
-
-| Workflow Status | Notification |
-|-----------------|--------------|
-| `FAILED` | Always sent via SNS topic (subscribe to receive) |
-| `COMPLETED` | Only sent if `SEND_COMPLETION_NOTIFICATION: True` |
-
-When completion notifications are enabled:
-- **VEP workflow**: Sends HTML email with presigned download URLs for result files (valid for 24 hours)
-- **GATK-BP workflow**: Sends notification indicating VEP annotation will start automatically
-
----
-
-## Solution Walkthrough & Testing
-
-
-### Subscribe to workflow failure SNS notification
-
-Before you test the solution, you need to subscribe to the Amazon SNS topic (name should be *_workflow_status_topic) with your email address to receive email notifications in case the HealthOmics workflow runs fail. Follow instructions here on how to subscribe: https://docs.aws.amazon.com/sns/latest/dg/sns-create-subscribe-endpoint-to-topic.html
-
-[NOTE!]
-> Confirm your subscription using the email received right after the above step.
-
-### Create and Upload a Sample Manifest CSV file
-
-When a batch of samples’ sequence data is generated and requires analysis using bioinformatics workflows, a user or an existing system, such as a Laboratory Information Management System (LIMS), generates a manifest, also referred to as a sample sheet, that describes the samples and associated metadata such as sample names and sequencing instrument related metadata. Below is an example CSV used for testing in this solution:
-
-```
-sample_name,read_group,fastq_1,fastq_2,platform
-NA12878,Sample_U0a,s3://aws-genomics-static-{aws-region}/omics-tutorials/data/fastq/NA12878/Sample_U0a/U0a_CGATGT_L001_R1_001.fastq.gz,s3://aws-genomics-static-{aws-region}/omics-tutorials/data/fastq/NA12878/Sample_U0a/U0a_CGATGT_L001_R2_001.fastq.gz,illumina
-```
-We will be using publicly available test FASTQ files hosted in public AWS test data buckets. You can use your own FASTQ files in your S3 buckets as well. 
-
-1. Use the provided test file in the solution code: *"workflows/vep/test_data/sample_manifest_with_test_data.csv"*. Replace the {aws-region} string in the file contents with the AWS region in which you have deployed the solution. The publicly available FASTQ data referenced in the CSV is available in all the regions where AWS HealthOmics is available.
-2. Upload this file to the input bucket created by the solution under the “fastq” prefix
-
-```
-aws s3 cp sample_manifest_with_test_data.csv s3://<INPUTBUCKET>/fastqs/
+```bash
+pip install streamlit
+cd mock_lims
+streamlit run app.py
 ```
 
-### Automated launch of the HealthOmics workflow – GATK-BP Germline fq2vcf for 30x genome
+In the sidebar, configure:
+- **API Endpoint URL**: `https://<your-api-id>.execute-api.us-east-1.amazonaws.com/v1`
+- **S3 Input Bucket**: the input bucket name from CDK outputs
+- **User Pool ID** and **App Client ID**: from the `lims-cognito-auth` stack outputs
 
-On file upload, The initial AWS Lambda function is launched and it performs the following steps:
+Log in with a Cognito user, then submit single or batch samples for analysis.
 
-* Checks for validity of sample manifest file;
-* Prepares inputs based on event and pre-configured data; and
-* Launches the workflow – GATK-BP Germline fq2vcf for 30x genome – using a HealthOmics API call.
+## API Reference
 
-You can navigate to the AWS HealthOmics console and confirm the launch of the workflow under "Runs"
+**Base URL**: `https://<your-api-id>.execute-api.us-east-1.amazonaws.com/v1`
 
-### Post GATK-BP Germline fq2vcf workflow
+All endpoints require a Cognito `id_token` in the `Authorization` header.
 
-AWS HealthOmics is integrated with Amazon EventBridge which enables downstream event-driven automation. We have set up two rules within EventBridge. 
+| Method | Path | Required Role | Description |
+|--------|------|---------------|-------------|
+| POST | `/analysis/start` | operator | Start genomics analysis pipeline |
+| GET | `/analysis/status/{sample_id}` | viewer | Query pipeline status for a sample |
+| POST | `/admin/approve` | admin | Approve or reject analysis results |
+| GET | `/admin/pending` | admin | List pending approval requests |
+| GET | `/admin/results` | admin | List approved results |
+| POST | `/admin/results/send` | admin | Send results via email with presigned URLs |
+| GET | `/lims/samples` | viewer | List LIMS samples (filtered by organization) |
 
-1. On successful completion of the "GATK-BP Germline fq2vcf for 30x genome" workflow, a Lambda function - post initial - is triggered to launch the next HealthOmics workflow – VEP – using the output (i.e. gVCF file) of the previous workflow. The outputs of the previous workflow run are BAM and gVCF files, which can be verified by inspecting the output S3 bucket and prefix for that workflow run.
-   
-2. On workflow failure, an Amazon SNS topic is the rule target. If you have subscribed to the SNS topic, you should receive a failure notification to your email that you used.
+### Example: Start Analysis
 
-Example event created by AWS HealthOmics on workflow run status change:
-
-    {
-        "version": "0",
-        "id": "64ca0eda-9751-dc55-c41a-1bd50b4fc9b7",
-        "detail-type": "Workflow Status Change",
-        "source": "aws.omics",
-        "account": "123456789012",
-        "time": "2018-07-01T17:53:06Z",
-        "region": "us-west-2",
-        "resources": [],
-        
-        "detail": {
-            "omicsVersion": "1.0.0",
-            "arn": "arn:aws:omics:us-west-2:123456789012:workflow/123456",
-            "status": "FAILED"
-        }
+```bash
+curl -X POST "$API_URL/analysis/start" \
+  -H "Authorization: $ID_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "source": "ClarityLIMS",
+    "event_type": "analysis.requested",
+    "data": {
+      "sample_id": "SAM-001",
+      "project_id": "PROJ-001",
+      "patient_id": "PAT-001",
+      "submitter_email": "user@example.com",
+      "reference_genome": "GRCh38",
+      "analysis_type": "WGS",
+      "fastq_paths": {
+        "r1": "s3://your-input-bucket/reads/sample_R1.fastq.gz",
+        "r2": "s3://your-input-bucket/reads/sample_R2.fastq.gz"
+      }
     }
+  }'
+```
 
-### Automated launch of the AWS HealthOmics workflow – VEP
-The successful completion of the "GATK-BP Germline fq2vcf for 30x genome" workflow triggers the post-initial Lambda function that:
+### Example: Approve Results
 
-* Verifies the outputs of this workflow;
-* Prepares the input payload for the next workflow, VEP, based on event and pre-configured data; and
-* Launches the workflow – VEP – using the HealthOmics API.
+```bash
+curl -X POST "$API_URL/admin/approve" \
+  -H "Authorization: $ID_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "sample_id": "SAM-001",
+    "timestamp": "2026-01-15T08:00:00.000Z",
+    "decision": "APPROVED",
+    "comment": "Results verified"
+  }'
+```
 
- 
-### Post VEP workflow 
-Upon successful workflow completion of the VEP workflow run, outputs of the workflow are uploaded to the output S3 location. Similar to the GATK-BP Germline fq2vcf workflow, if the workflow fails or times out, the configured EventBridge rule triggers an SNS notification to notify the email distribution list so that appropriate actions can be taken by users. 
+## Pipeline Status Lifecycle
 
---------------
-## Clean up
+```
+Normal flow:
+  INITIALIZED -> GATK_RUNNING -> GATK_COMPLETED -> VEP_RUNNING -> VEP_COMPLETED
+    -> AWAITING_APPROVAL -> COMPLETED_APPROVED or COMPLETED_REJECTED
 
-* Empty the S3 input and output buckets before cleaning up the solution with IaC.
-* Execute the commands shown below to delete the resources created by the solution.
+Error states:
+  VALIDATION_FAILED  — Input validation failure
+  WORKFLOW_FAILED    — GATK/VEP execution failure
+  WORKFLOW_TIMEOUT   — HealthOmics did not complete within 24 hours
+  APPROVAL_TIMEOUT   — Admin did not respond within 7 days
+```
 
-    cdk destroy 
+## Cost Estimation
 
-## Cost
+| Service | Cost |
+|---------|------|
+| HealthOmics GATK-BP Germline fq2vcf | ~$10 per run |
+| HealthOmics VEP (private workflow) | ~$0.17 per run |
+| S3 storage (1 GB sample data) | ~$0.023/month |
+| Lambda, EventBridge, SNS | Within AWS Free Tier |
 
-The cost of running this solution is based on the usage of AWS services. Users will be charged based on the processing time for services (ex: HealthOmics workflow) and for storage (ex: S3).
+**Total per run**: approximately **$10.59** with sample test data.
 
-* Amazon S3
-    * With sample data approximately 1 GB ≈ $0.023 
-* AWS HealthOmics
-    * HealthOmics GATK-BP Germline fq2vcf workflow: $10 per run
-    * Private VEP workflow with test data included: $0.17
-* AWS Lambda
-    * Initial lambda function memory: 512 MB → $0.0000000083 per ms
-    * Post-initial lambda function memory: 128 MB → $0.0000000021 per ms
-* Amazon EventBridge
-    * Falls within the AWS Free Tier.
-* Amazon SNS
-    * Falls within the AWS Free Tier.
+> **Warning**: Be cautious with batch submissions. Each sample triggers a full GATK + VEP pipeline run.
 
-For example: 
-If you have a workflow that uses the sample data put into S3, run the architecture once with no failures it will cost approximately $10.59.
+## Clean Up
 
+```bash
+# Empty S3 buckets first (CDK cannot delete non-empty buckets)
+aws s3 rm s3://healthomics-cka-input-<account-id>-us-east-1 --recursive
+aws s3 rm s3://healthomics-cka-output-<account-id>-us-east-1 --recursive
 
-## Changes
+# Destroy all stacks
+cdk destroy --all
+```
 
-Please review the file: [CHANGES](./CHANGES.md) for a list of revisions made to this solution.
+## Important Notes
 
-## License and Citations
+- **Region**: Must deploy to `us-east-1` — HealthOmics Ready2Run workflows are only available in this region.
+- **HealthOmics TPS limit**: `StartRun` API quota is 1.0 requests/second. All Lambda functions use adaptive retry (`max_attempts=10`).
+- **SES sandbox mode**: New AWS accounts start in SES sandbox mode where both sender and recipient emails must be verified. Request production access in the AWS Console for unrestricted sending.
+- **GATK Ready2Run Workflow ID**: Currently `9500764`. This ID is managed by AWS and may change. Verify with:
+  ```bash
+  aws omics list-workflows --type READY2RUN --region us-east-1 \
+    --query "items[?name=='GATK-BP Germline fq2vcf for 30x Genome']"
+  ```
+- **VEP container build**: The first deployment builds a VEP Docker image via CodeBuild (~5-10 minutes).
+- **Secrets in code**: Consider using [git-secrets](https://github.com/awslabs/git-secrets) or a pre-commit hook to prevent accidental commits of credentials.
 
-[LICENSE](./LICENSE)
+## Security Considerations
 
-[Third Party Licenses](./THIRD-PARTY-LICENCES)
+- No hardcoded secrets — all sensitive configuration is in `constants.py` (gitignored for local overrides via `constants.local.py`)
+- IAM least-privilege policies scoped to specific resource ARNs
+- S3 buckets encrypted at rest with `BlockPublicAccess.BLOCK_ALL`
+- HTTPS enforced on CloudFront (`REDIRECT_TO_HTTPS`)
+- Cognito password policy: 12+ characters, mixed case, numbers, symbols
+- MFA support (optional TOTP)
+- Presigned URLs expire after 24 hours
+- CORS restricted to the CloudFront domain
+- Frontend tokens stored in `sessionStorage` (cleared on tab close)
+- XSS prevention via `escapeHtml()` utility
 
-[Citations](./CITATIONS.md)
+## License
+
+[MIT-0 License](./LICENSE)
+
+## Third-Party Licenses
+
+See [THIRD-PARTY-LICENCES](./THIRD-PARTY-LICENCES) for details.
+
+## Citations
+
+See [CITATIONS.md](./CITATIONS.md).
 
 ## Contributing
 
-Please review the file: [CONTRIBUTING](./CONTRIBUTING.md)
+See [CONTRIBUTING.md](./CONTRIBUTING.md).
 
 ## Acknowledgements
 
-We would like to acknowledge the contributions of the following people:
-
-- **Nadeem Bulsara** -  Principal Solutions Architect, Genomics/Multiomics
-- **Chris Kaspar** - Principal Solutions Architect
-- **Gabriela Karina Paulus** - Solutions Architect
-- **Kayla Taylor** - Associate Solutions Architect
-- **Eleni Dimokidis** - APJ Healthcare Technical Lead
+- **Nadeem Bulsara** — Principal Solutions Architect, Genomics/Multiomics
+- **Chris Kaspar** — Principal Solutions Architect
+- **Gabriela Karina Paulus** — Solutions Architect
+- **Kayla Taylor** — Associate Solutions Architect
+- **Eleni Dimokidis** — APJ Healthcare Technical Lead

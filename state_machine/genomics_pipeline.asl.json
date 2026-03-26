@@ -1,0 +1,489 @@
+{
+  "Comment": "Genomics Analysis Pipeline - LIMS triggered GATK -> VEP -> Admin Approval",
+  "StartAt": "ValidateInput",
+  "States": {
+    "ValidateInput": {
+      "Type": "Pass",
+      "Comment": "Validate input parameters from LIMS",
+      "Next": "InitializeDynamoDB"
+    },
+    "InitializeDynamoDB": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::dynamodb:putItem",
+      "Parameters": {
+        "TableName": "${WorkflowStateTable}",
+        "Item": {
+          "SampleID": { "S.$": "$.sample_id" },
+          "Timestamp": { "S.$": "$$.Execution.StartTime" },
+          "ProjectID": { "S.$": "$.project_id" },
+          "SubmitterEmail": { "S.$": "$.submitter_email" },
+          "ReferenceGenome": { "S.$": "$.reference_genome" },
+          "AnalysisType": { "S.$": "$.analysis_type" },
+          "ExecutionArn": { "S.$": "$$.Execution.Id" },
+          "Status": { "S": "INITIALIZED" },
+          "FastqR1": { "S.$": "$.fastq_paths.r1" },
+          "FastqR2": { "S.$": "$.fastq_paths.r2" },
+          "OrganizationID": { "S.$": "$.organization_id" }
+        }
+      },
+      "ResultPath": "$.dynamodb_init",
+      "Next": "StartGATKWorkflow",
+      "Catch": [
+        {
+          "ErrorEquals": ["States.ALL"],
+          "Next": "HandleValidationFailure",
+          "ResultPath": "$.error"
+        }
+      ]
+    },
+    "StartGATKWorkflow": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::lambda:invoke",
+      "Parameters": {
+        "FunctionName": "${StartGATKFunctionArn}",
+        "Payload": {
+          "sample_id.$": "$.sample_id",
+          "project_id.$": "$.project_id",
+          "fastq_paths.$": "$.fastq_paths",
+          "reference_genome.$": "$.reference_genome",
+          "analysis_type.$": "$.analysis_type",
+          "execution_arn.$": "$$.Execution.Id"
+        }
+      },
+      "ResultPath": "$.gatk_result",
+      "ResultSelector": {
+        "run_id.$": "$.Payload.run_id",
+        "run_arn.$": "$.Payload.run_arn"
+      },
+      "Next": "UpdateStateGATKRunning",
+      "Catch": [
+        {
+          "ErrorEquals": ["States.ALL"],
+          "Next": "HandleWorkflowFailure",
+          "ResultPath": "$.error"
+        }
+      ]
+    },
+    "UpdateStateGATKRunning": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::dynamodb:updateItem",
+      "Parameters": {
+        "TableName": "${WorkflowStateTable}",
+        "Key": {
+          "SampleID": { "S.$": "$.sample_id" },
+          "Timestamp": { "S.$": "$$.Execution.StartTime" }
+        },
+        "UpdateExpression": "SET #s = :status, GATKRunId = :runId, UpdatedAt = :updated",
+        "ExpressionAttributeNames": {
+          "#s": "Status"
+        },
+        "ExpressionAttributeValues": {
+          ":status": { "S": "GATK_RUNNING" },
+          ":runId": { "S.$": "$.gatk_result.run_id" },
+          ":updated": { "S.$": "$$.State.EnteredTime" }
+        }
+      },
+      "ResultPath": "$.update_result",
+      "Next": "WaitForGATKCompletion"
+    },
+    "WaitForGATKCompletion": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::lambda:invoke.waitForTaskToken",
+      "Parameters": {
+        "FunctionName": "${StoreTokenFunctionArn}",
+        "Payload": {
+          "task_token.$": "$$.Task.Token",
+          "run_id.$": "$.gatk_result.run_id",
+          "execution_arn.$": "$$.Execution.Id",
+          "workflow_type": "GATK",
+          "sample_id.$": "$.sample_id"
+        }
+      },
+      "ResultPath": "$.gatk_completion",
+      "TimeoutSeconds": 86400,
+      "Catch": [
+        {
+          "ErrorEquals": ["States.Timeout"],
+          "Next": "HandleWorkflowTimeout",
+          "ResultPath": "$.error"
+        },
+        {
+          "ErrorEquals": ["States.ALL"],
+          "Next": "HandleWorkflowFailure",
+          "ResultPath": "$.error"
+        }
+      ],
+      "Next": "UpdateStateGATKCompleted"
+    },
+    "UpdateStateGATKCompleted": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::dynamodb:updateItem",
+      "Parameters": {
+        "TableName": "${WorkflowStateTable}",
+        "Key": {
+          "SampleID": { "S.$": "$.sample_id" },
+          "Timestamp": { "S.$": "$$.Execution.StartTime" }
+        },
+        "UpdateExpression": "SET #s = :status, GATKOutputUri = :outputUri, UpdatedAt = :updated",
+        "ExpressionAttributeNames": {
+          "#s": "Status"
+        },
+        "ExpressionAttributeValues": {
+          ":status": { "S": "GATK_COMPLETED" },
+          ":outputUri": { "S.$": "$.gatk_completion.output_uri" },
+          ":updated": { "S.$": "$$.State.EnteredTime" }
+        }
+      },
+      "ResultPath": "$.update_result",
+      "Next": "StartVEPWorkflow"
+    },
+    "StartVEPWorkflow": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::lambda:invoke",
+      "Parameters": {
+        "FunctionName": "${StartVEPFunctionArn}",
+        "Payload": {
+          "sample_id.$": "$.sample_id",
+          "project_id.$": "$.project_id",
+          "gatk_output.$": "$.gatk_completion",
+          "reference_genome.$": "$.reference_genome",
+          "execution_arn.$": "$$.Execution.Id"
+        }
+      },
+      "ResultPath": "$.vep_result",
+      "ResultSelector": {
+        "run_id.$": "$.Payload.run_id",
+        "run_arn.$": "$.Payload.run_arn"
+      },
+      "Next": "UpdateStateVEPRunning",
+      "Catch": [
+        {
+          "ErrorEquals": ["States.ALL"],
+          "Next": "HandleWorkflowFailure",
+          "ResultPath": "$.error"
+        }
+      ]
+    },
+    "UpdateStateVEPRunning": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::dynamodb:updateItem",
+      "Parameters": {
+        "TableName": "${WorkflowStateTable}",
+        "Key": {
+          "SampleID": { "S.$": "$.sample_id" },
+          "Timestamp": { "S.$": "$$.Execution.StartTime" }
+        },
+        "UpdateExpression": "SET #s = :status, VEPRunId = :runId, UpdatedAt = :updated",
+        "ExpressionAttributeNames": {
+          "#s": "Status"
+        },
+        "ExpressionAttributeValues": {
+          ":status": { "S": "VEP_RUNNING" },
+          ":runId": { "S.$": "$.vep_result.run_id" },
+          ":updated": { "S.$": "$$.State.EnteredTime" }
+        }
+      },
+      "ResultPath": "$.update_result",
+      "Next": "WaitForVEPCompletion"
+    },
+    "WaitForVEPCompletion": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::lambda:invoke.waitForTaskToken",
+      "Parameters": {
+        "FunctionName": "${StoreTokenFunctionArn}",
+        "Payload": {
+          "task_token.$": "$$.Task.Token",
+          "run_id.$": "$.vep_result.run_id",
+          "execution_arn.$": "$$.Execution.Id",
+          "workflow_type": "VEP",
+          "sample_id.$": "$.sample_id"
+        }
+      },
+      "ResultPath": "$.vep_completion",
+      "TimeoutSeconds": 86400,
+      "Catch": [
+        {
+          "ErrorEquals": ["States.Timeout"],
+          "Next": "HandleWorkflowTimeout",
+          "ResultPath": "$.error"
+        },
+        {
+          "ErrorEquals": ["States.ALL"],
+          "Next": "HandleWorkflowFailure",
+          "ResultPath": "$.error"
+        }
+      ],
+      "Next": "UpdateStateVEPCompleted"
+    },
+    "UpdateStateVEPCompleted": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::dynamodb:updateItem",
+      "Parameters": {
+        "TableName": "${WorkflowStateTable}",
+        "Key": {
+          "SampleID": { "S.$": "$.sample_id" },
+          "Timestamp": { "S.$": "$$.Execution.StartTime" }
+        },
+        "UpdateExpression": "SET #s = :status, VEPOutputUri = :outputUri, UpdatedAt = :updated",
+        "ExpressionAttributeNames": {
+          "#s": "Status"
+        },
+        "ExpressionAttributeValues": {
+          ":status": { "S": "VEP_COMPLETED" },
+          ":outputUri": { "S.$": "$.vep_completion.output_uri" },
+          ":updated": { "S.$": "$$.State.EnteredTime" }
+        }
+      },
+      "ResultPath": "$.update_result",
+      "Next": "PrepareForApproval"
+    },
+    "PrepareForApproval": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::lambda:invoke",
+      "Parameters": {
+        "FunctionName": "${PrepareApprovalFunctionArn}",
+        "Payload": {
+          "sample_id.$": "$.sample_id",
+          "project_id.$": "$.project_id",
+          "submitter_email.$": "$.submitter_email",
+          "vep_output.$": "$.vep_completion",
+          "gatk_run_id.$": "$.gatk_result.run_id",
+          "vep_run_id.$": "$.vep_result.run_id"
+        }
+      },
+      "ResultPath": "$.approval_prep",
+      "Next": "WaitForAdminApproval",
+      "Catch": [
+        {
+          "ErrorEquals": ["States.ALL"],
+          "Next": "HandleWorkflowFailure",
+          "ResultPath": "$.error"
+        }
+      ]
+    },
+    "WaitForAdminApproval": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::lambda:invoke.waitForTaskToken",
+      "Parameters": {
+        "FunctionName": "${StoreApprovalTokenFunctionArn}",
+        "Payload": {
+          "task_token.$": "$$.Task.Token",
+          "sample_id.$": "$.sample_id",
+          "project_id.$": "$.project_id",
+          "execution_arn.$": "$$.Execution.Id",
+          "timestamp.$": "$$.Execution.StartTime"
+        }
+      },
+      "ResultPath": "$.approval_result",
+      "TimeoutSeconds": 604800,
+      "Catch": [
+        {
+          "ErrorEquals": ["States.Timeout"],
+          "Next": "HandleApprovalTimeout",
+          "ResultPath": "$.error"
+        },
+        {
+          "ErrorEquals": ["ApprovalRejected"],
+          "Next": "FinalizeRejected",
+          "ResultPath": "$.rejection"
+        },
+        {
+          "ErrorEquals": ["States.ALL"],
+          "Next": "HandleWorkflowFailure",
+          "ResultPath": "$.error"
+        }
+      ],
+      "Next": "FinalizeApproved"
+    },
+    "FinalizeApproved": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::dynamodb:updateItem",
+      "Parameters": {
+        "TableName": "${WorkflowStateTable}",
+        "Key": {
+          "SampleID": { "S.$": "$.sample_id" },
+          "Timestamp": { "S.$": "$$.Execution.StartTime" }
+        },
+        "UpdateExpression": "SET #s = :status, UpdatedAt = :updated",
+        "ExpressionAttributeNames": {
+          "#s": "Status"
+        },
+        "ExpressionAttributeValues": {
+          ":status": { "S": "COMPLETED_APPROVED" },
+          ":updated": { "S.$": "$$.State.EnteredTime" }
+        }
+      },
+      "ResultPath": "$.finalize_result",
+      "Next": "PipelineSucceeded"
+    },
+    "PipelineSucceeded": {
+      "Type": "Succeed"
+    },
+    "FinalizeRejected": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::dynamodb:updateItem",
+      "Parameters": {
+        "TableName": "${WorkflowStateTable}",
+        "Key": {
+          "SampleID": { "S.$": "$.sample_id" },
+          "Timestamp": { "S.$": "$$.Execution.StartTime" }
+        },
+        "UpdateExpression": "SET #s = :status, UpdatedAt = :updated",
+        "ExpressionAttributeNames": {
+          "#s": "Status"
+        },
+        "ExpressionAttributeValues": {
+          ":status": { "S": "COMPLETED_REJECTED" },
+          ":updated": { "S.$": "$$.State.EnteredTime" }
+        }
+      },
+      "ResultPath": "$.finalize_result",
+      "Next": "PipelineRejected"
+    },
+    "PipelineRejected": {
+      "Type": "Succeed",
+      "Comment": "Pipeline completed but results were rejected by admin"
+    },
+    "HandleValidationFailure": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::dynamodb:updateItem",
+      "Parameters": {
+        "TableName": "${WorkflowStateTable}",
+        "Key": {
+          "SampleID": { "S.$": "$.sample_id" },
+          "Timestamp": { "S.$": "$$.Execution.StartTime" }
+        },
+        "UpdateExpression": "SET #s = :status, ErrorInfo = :error, UpdatedAt = :updated",
+        "ExpressionAttributeNames": {
+          "#s": "Status"
+        },
+        "ExpressionAttributeValues": {
+          ":status": { "S": "VALIDATION_FAILED" },
+          ":error": { "S.$": "States.JsonToString($.error)" },
+          ":updated": { "S.$": "$$.State.EnteredTime" }
+        }
+      },
+      "ResultPath": "$.update_result",
+      "Next": "TagValidationFailure"
+    },
+    "TagValidationFailure": {
+      "Type": "Pass",
+      "Result": "VALIDATION_FAILED",
+      "ResultPath": "$.failure_type",
+      "Next": "SendFailureNotification"
+    },
+    "HandleWorkflowFailure": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::dynamodb:updateItem",
+      "Parameters": {
+        "TableName": "${WorkflowStateTable}",
+        "Key": {
+          "SampleID": { "S.$": "$.sample_id" },
+          "Timestamp": { "S.$": "$$.Execution.StartTime" }
+        },
+        "UpdateExpression": "SET #s = :status, ErrorInfo = :error, UpdatedAt = :updated",
+        "ExpressionAttributeNames": {
+          "#s": "Status"
+        },
+        "ExpressionAttributeValues": {
+          ":status": { "S": "WORKFLOW_FAILED" },
+          ":error": { "S.$": "States.JsonToString($.error)" },
+          ":updated": { "S.$": "$$.State.EnteredTime" }
+        }
+      },
+      "ResultPath": "$.update_result",
+      "Next": "TagWorkflowFailure"
+    },
+    "TagWorkflowFailure": {
+      "Type": "Pass",
+      "Result": "WORKFLOW_FAILED",
+      "ResultPath": "$.failure_type",
+      "Next": "SendFailureNotification"
+    },
+    "HandleWorkflowTimeout": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::dynamodb:updateItem",
+      "Parameters": {
+        "TableName": "${WorkflowStateTable}",
+        "Key": {
+          "SampleID": { "S.$": "$.sample_id" },
+          "Timestamp": { "S.$": "$$.Execution.StartTime" }
+        },
+        "UpdateExpression": "SET #s = :status, ErrorInfo = :error, UpdatedAt = :updated",
+        "ExpressionAttributeNames": {
+          "#s": "Status"
+        },
+        "ExpressionAttributeValues": {
+          ":status": { "S": "WORKFLOW_TIMEOUT" },
+          ":error": { "S": "HealthOmics workflow exceeded timeout" },
+          ":updated": { "S.$": "$$.State.EnteredTime" }
+        }
+      },
+      "ResultPath": "$.update_result",
+      "Next": "TagWorkflowTimeout"
+    },
+    "TagWorkflowTimeout": {
+      "Type": "Pass",
+      "Result": "WORKFLOW_TIMEOUT",
+      "ResultPath": "$.failure_type",
+      "Next": "SendFailureNotification"
+    },
+    "HandleApprovalTimeout": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::dynamodb:updateItem",
+      "Parameters": {
+        "TableName": "${WorkflowStateTable}",
+        "Key": {
+          "SampleID": { "S.$": "$.sample_id" },
+          "Timestamp": { "S.$": "$$.Execution.StartTime" }
+        },
+        "UpdateExpression": "SET #s = :status, ErrorInfo = :error, UpdatedAt = :updated",
+        "ExpressionAttributeNames": {
+          "#s": "Status"
+        },
+        "ExpressionAttributeValues": {
+          ":status": { "S": "APPROVAL_TIMEOUT" },
+          ":error": { "S": "Admin approval not received within timeout period" },
+          ":updated": { "S.$": "$$.State.EnteredTime" }
+        }
+      },
+      "ResultPath": "$.update_result",
+      "Next": "TagApprovalTimeout"
+    },
+    "TagApprovalTimeout": {
+      "Type": "Pass",
+      "Result": "APPROVAL_TIMEOUT",
+      "ResultPath": "$.failure_type",
+      "Next": "SendFailureNotification"
+    },
+    "SendFailureNotification": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::lambda:invoke",
+      "Parameters": {
+        "FunctionName": "${FailureNotificationFunctionArn}",
+        "Payload": {
+          "sample_id.$": "$.sample_id",
+          "project_id.$": "$.project_id",
+          "submitter_email.$": "$.submitter_email",
+          "organization_id.$": "$.organization_id",
+          "failure_type.$": "$.failure_type",
+          "error.$": "$.error"
+        }
+      },
+      "ResultPath": "$.notification_result",
+      "Next": "PipelineFailed",
+      "Catch": [
+        {
+          "ErrorEquals": ["States.ALL"],
+          "Next": "PipelineFailed",
+          "Comment": "Notification failure should not block the pipeline from reporting its own failure"
+        }
+      ]
+    },
+    "PipelineFailed": {
+      "Type": "Fail",
+      "Error": "PipelineError",
+      "Cause": "Pipeline failed - check DynamoDB for details"
+    }
+  }
+}

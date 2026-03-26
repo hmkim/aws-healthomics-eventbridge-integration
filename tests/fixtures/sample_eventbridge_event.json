@@ -1,0 +1,17 @@
+{
+  "version": "0",
+  "id": "12345678-1234-1234-1234-123456789012",
+  "detail-type": "Run Status Change",
+  "source": "aws.omics",
+  "account": "123456789012",
+  "time": "2026-02-17T12:00:00Z",
+  "region": "us-east-1",
+  "resources": [
+    "arn:aws:omics:us-east-1:123456789012:run/1234567"
+  ],
+  "detail": {
+    "omicsVersion": "1.0.0",
+    "arn": "arn:aws:omics:us-east-1:123456789012:run/1234567",
+    "status": "COMPLETED"
+  }
+}
